@@ -2,6 +2,8 @@ import OpenAI from "openai";
 import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { generateFallbackCases } from "@/lib/test-case-generator";
+import { estimateAliyunCostCny, estimateDeepSeekCostCny, normalizeReasoningEffort, normalizeThinkingMode, providerBaseURLs, providerLabels, providerModels } from "@/lib/model-config";
+import { saveRunHistoryRecord } from "@/lib/server/run-history-db";
 import {
   caseTypeOptions,
   defaultExecutionType,
@@ -18,19 +20,24 @@ import type {
   CoverageModule,
   CoverageTestPoint,
   GenerateResponse,
+  GenerationModuleStats,
+  GenerationUsage,
+  ReasoningEffort,
   RiskLevel,
   TestCase,
   TestCategory,
   TestPriority,
+  ThinkingMode,
 } from "@/types/test-case";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
 
-type LlmProvider = "openai" | "deepseek" | "aliyun";
+type LlmProvider = "openai" | "deepseek" | "aliyun" | "velotric";
 
 type StreamEvent =
   | { type: "stage"; message: string; detail?: string }
+  | { type: "thinking"; message: string; detail?: string }
   | { type: "chunk"; content: string }
   | { type: "result"; data: GenerateResponse }
   | { type: "error"; message: string; detail?: string }
@@ -127,25 +134,31 @@ const negativeSignals = [
 const providerDefaults: Record<LlmProvider, { label: string; model: string; baseURL?: string; envKey: string }> = {
   openai: {
     label: "OpenAI",
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    model: process.env.OPENAI_MODEL || providerModels.openai,
     envKey: process.env.OPENAI_API_KEY || "",
   },
   deepseek: {
     label: "DeepSeek",
-    model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+    model: process.env.DEEPSEEK_MODEL || providerModels.deepseek,
     baseURL: "https://api.deepseek.com",
     envKey: process.env.DEEPSEEK_API_KEY || "",
   },
   aliyun: {
     label: "阿里云百炼",
-    model: process.env.DASHSCOPE_MODEL || "qwen-plus",
+    model: process.env.DASHSCOPE_MODEL || providerModels.aliyun,
     baseURL: process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1",
     envKey: process.env.DASHSCOPE_API_KEY || "",
+  },
+  velotric: {
+    label: "Velotric 号池",
+    model: process.env.VELOTRIC_MODEL || providerModels.velotric,
+    baseURL: process.env.VELOTRIC_BASE_URL || providerBaseURLs.velotric,
+    envKey: process.env.VELOTRIC_API_KEY || "",
   },
 };
 
 function getProvider(value: FormDataEntryValue | null): LlmProvider {
-  if (value === "openai" || value === "aliyun") return value;
+  if (value === "openai" || value === "aliyun" || value === "velotric") return value;
   return "deepseek";
 }
 
@@ -184,47 +197,200 @@ function getErrorMessage(error: unknown) {
   return typeof error === "string" ? error : "未知错误";
 }
 
-function createClient(provider: LlmProvider, apiKey: string) {
+class GenerationCancelledError extends Error {
+  constructor() {
+    super("用户已停止本次生成。");
+    this.name = "GenerationCancelledError";
+  }
+}
+
+class EmptyModelContentError extends Error {
+  usage?: GenerationUsage;
+
+  constructor(message: string, usage?: GenerationUsage) {
+    super(message);
+    this.name = "EmptyModelContentError";
+    this.usage = usage;
+  }
+}
+
+function assertNotAborted(signal?: AbortSignal) {
+  if (signal?.aborted) throw new GenerationCancelledError();
+}
+
+function isCancelledError(error: unknown) {
+  return error instanceof GenerationCancelledError || (error instanceof Error && (error.name === "AbortError" || error.message.includes("aborted")));
+}
+
+function getErrorUsage(error: unknown) {
+  return error instanceof EmptyModelContentError ? error.usage : undefined;
+}
+
+function isTransientStreamError(error: unknown) {
+  if (isCancelledError(error)) return false;
+  if (!(error instanceof Error)) return false;
+
+  const maybeError = error as Error & {
+    code?: string;
+    type?: string;
+    status?: number;
+    error?: { code?: string; type?: string; message?: string };
+  };
+  const text = [error.message, maybeError.code, maybeError.type, maybeError.error?.code, maybeError.error?.type, maybeError.error?.message]
+    .filter(Boolean)
+    .join(" ")
+    .toLowerCase();
+
+  return (
+    text.includes("stream error") ||
+    text.includes("internal_error") ||
+    text.includes("internal_server_error") ||
+    text.includes("econnreset") ||
+    text.includes("etimedout") ||
+    text.includes("socket hang up") ||
+    maybeError.status === 500 ||
+    maybeError.status === 502 ||
+    maybeError.status === 503 ||
+    maybeError.status === 504
+  );
+}
+
+function getMaxAttempts(provider: LlmProvider) {
+  if (provider === "deepseek") return 3;
+  if (provider === "velotric") return 2;
+  return 1;
+}
+
+function getProviderMaxTokens(provider: LlmProvider, desired: number, cap: number) {
+  const providerCap = provider === "velotric" ? Math.min(cap, 8_000) : cap;
+  return Math.min(providerCap, desired);
+}
+
+function serializeError(error: unknown) {
+  if (error instanceof Error) {
+    const extra = Object.fromEntries(
+      Object.entries(error as unknown as Record<string, unknown>).filter(([key]) => !["name", "message", "stack"].includes(key)),
+    );
+    return JSON.stringify(
+      {
+        name: error.name,
+        message: error.message,
+        stack: error.stack,
+        ...extra,
+      },
+      null,
+      2,
+    ).slice(0, 8_000);
+  }
+
+  try {
+    return JSON.stringify(error, null, 2).slice(0, 8_000);
+  } catch {
+    return String(error).slice(0, 8_000);
+  }
+}
+
+function createClient(provider: LlmProvider, apiKey: string, baseURL?: string) {
   const config = providerDefaults[provider];
   return new OpenAI({
     apiKey,
-    ...(config.baseURL ? { baseURL: config.baseURL } : {}),
+    ...(baseURL || config.baseURL ? { baseURL: baseURL || config.baseURL } : {}),
   });
 }
 
-async function streamJsonRequest<T>({
+function emptyUsage(): GenerationUsage {
+  return { promptTokens: 0, completionTokens: 0, totalTokens: 0 };
+}
+
+function addUsage(current: GenerationUsage | undefined, next: GenerationUsage | undefined) {
+  if (!current && !next) return undefined;
+  const base = current ?? emptyUsage();
+  const addition = next ?? emptyUsage();
+  return {
+    promptTokens: base.promptTokens + addition.promptTokens,
+    completionTokens: base.completionTokens + addition.completionTokens,
+    totalTokens: base.totalTokens + addition.totalTokens,
+    ...((base.reasoningTokens ?? addition.reasoningTokens) !== undefined
+      ? { reasoningTokens: (base.reasoningTokens ?? 0) + (addition.reasoningTokens ?? 0) }
+      : {}),
+  };
+}
+
+function normalizeUsage(value: OpenAI.Completions.CompletionUsage | null | undefined): GenerationUsage | undefined {
+  if (!value) return undefined;
+  const completionDetails = value.completion_tokens_details as { reasoning_tokens?: number } | null | undefined;
+  return {
+    promptTokens: value.prompt_tokens ?? 0,
+    completionTokens: value.completion_tokens ?? 0,
+    totalTokens: value.total_tokens ?? 0,
+    ...(completionDetails?.reasoning_tokens ? { reasoningTokens: completionDetails.reasoning_tokens } : {}),
+  };
+}
+
+async function streamJsonRequestOnce<T>({
   apiKey,
+  baseURL,
   model,
   provider,
   messages,
   maxTokens,
   onEvent,
+  reasoningEffort,
   stageLabel,
+  thinkingMode,
+  signal,
+  useJsonMode,
 }: {
   apiKey: string;
+  baseURL?: string;
   model: string;
   provider: LlmProvider;
   messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
   maxTokens: number;
   onEvent: (event: StreamEvent) => void;
+  reasoningEffort: ReasoningEffort;
   stageLabel: string;
+  thinkingMode: ThinkingMode;
+  signal?: AbortSignal;
+  useJsonMode: boolean;
 }) {
-  const client = createClient(provider, apiKey);
-  const stream = await client.chat.completions.create({
+  assertNotAborted(signal);
+  const client = createClient(provider, apiKey, baseURL);
+  const requestBody = {
     model,
     messages,
-    response_format: { type: "json_object" },
+    ...(useJsonMode ? { response_format: { type: "json_object" as const } } : {}),
     max_tokens: maxTokens,
     stream: true,
-  });
+    stream_options: { include_usage: true },
+    ...(provider === "aliyun" ? { enable_thinking: thinkingMode === "quality" } : {}),
+    ...(provider === "openai" || provider === "velotric" ? { reasoning_effort: reasoningEffort } : {}),
+  } as OpenAI.Chat.Completions.ChatCompletionCreateParamsStreaming & { enable_thinking?: boolean };
+  const stream = await client.chat.completions.create(requestBody, { signal });
 
   let content = "";
   let chunkCount = 0;
+  let thinkingChunkCount = 0;
   let finishReason: string | null = null;
+  let usage: GenerationUsage | undefined;
 
   for await (const chunk of stream) {
+    assertNotAborted(signal);
     finishReason = chunk.choices[0]?.finish_reason ?? finishReason;
-    const delta = chunk.choices[0]?.delta?.content ?? "";
+    usage = normalizeUsage(chunk.usage) ?? usage;
+    const deltaPayload = chunk.choices[0]?.delta as { content?: string | null; reasoning_content?: string | null };
+    const reasoningContent = deltaPayload?.reasoning_content ?? "";
+    if (reasoningContent) {
+      thinkingChunkCount += 1;
+      if (thinkingChunkCount === 1 || thinkingChunkCount % 20 === 0) {
+        onEvent({
+          type: "thinking",
+          message: "模型正在思考",
+          detail: `${stageLabel}：推理模型正在组织结构化输出，暂时可能没有可展示的 JSON 内容。`,
+        });
+      }
+    }
+    const delta = deltaPayload?.content ?? "";
     if (!delta) continue;
 
     content += delta;
@@ -240,13 +406,96 @@ async function streamJsonRequest<T>({
     }
   }
 
-  if (!content.trim()) throw new Error(`${providerDefaults[provider].label} 返回了空内容。`);
+  if (!content.trim()) throw new EmptyModelContentError(`${providerDefaults[provider].label} 返回了空内容。`, usage);
 
   return {
     payload: parseJsonObject<T>(content),
     rawLength: content.length,
     finishReason,
+    usage,
   };
+}
+
+async function streamJsonRequest<T>({
+  apiKey,
+  baseURL,
+  model,
+  provider,
+  messages,
+  maxTokens,
+  onEvent,
+  reasoningEffort,
+  stageLabel,
+  thinkingMode,
+  signal,
+}: {
+  apiKey: string;
+  baseURL?: string;
+  model: string;
+  provider: LlmProvider;
+  messages: OpenAI.Chat.Completions.ChatCompletionMessageParam[];
+  maxTokens: number;
+  onEvent: (event: StreamEvent) => void;
+  reasoningEffort: ReasoningEffort;
+  stageLabel: string;
+  thinkingMode: ThinkingMode;
+  signal?: AbortSignal;
+}) {
+  const maxAttempts = getMaxAttempts(provider);
+  let accumulatedUsage: GenerationUsage | undefined;
+  let lastError: unknown;
+
+  for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
+    const useJsonMode = !(provider === "deepseek" && attempt === maxAttempts && maxAttempts > 1);
+
+    if (attempt > 1) {
+      onEvent({
+        type: "stage",
+        message: provider === "deepseek" ? "DeepSeek 输出为空，正在自动重试" : "模型流式连接中断，正在自动重试",
+        detail: `${stageLabel}：第 ${attempt}/${maxAttempts} 次调用${useJsonMode ? "，继续使用 JSON 模式" : "，改用普通流式输出并从内容中提取 JSON"}`,
+      });
+    }
+
+    try {
+      const result = await streamJsonRequestOnce<T>({
+        apiKey,
+        baseURL,
+        model,
+        provider,
+        messages,
+        maxTokens,
+        onEvent,
+        reasoningEffort,
+        stageLabel,
+        thinkingMode,
+        signal,
+        useJsonMode,
+      });
+
+      return {
+        ...result,
+        usage: addUsage(accumulatedUsage, result.usage),
+      };
+    } catch (error) {
+      accumulatedUsage = addUsage(accumulatedUsage, getErrorUsage(error));
+      if (isCancelledError(error)) throw error;
+
+      lastError = error;
+      const canRetryEmptyContent = provider === "deepseek" && error instanceof EmptyModelContentError && attempt < maxAttempts;
+      const canRetryTransientStream = provider === "velotric" && isTransientStreamError(error) && attempt < maxAttempts;
+      if (canRetryEmptyContent || canRetryTransientStream) continue;
+      break;
+    }
+  }
+
+  if (provider === "deepseek" && lastError instanceof EmptyModelContentError) {
+    throw new EmptyModelContentError(
+      "DeepSeek JSON 输出为空，已自动重试仍失败。建议稍后重试、切换 DeepSeek 模型，或改用阿里云/OpenAI 生成。",
+      accumulatedUsage,
+    );
+  }
+
+  throw lastError instanceof Error ? lastError : new Error("模型调用失败。");
 }
 
 function formatModuleName(module: ModulePlan) {
@@ -674,19 +923,28 @@ function buildSummary(fileName: string, modules: ModulePlan[], cases: TestCase[]
 
 async function generateModulePlan({
   apiKey,
+  baseURL,
   fileName,
   model,
   onEvent,
   provider,
+  reasoningEffort,
+  signal,
   text,
+  thinkingMode,
 }: {
   apiKey: string;
+  baseURL?: string;
   fileName: string;
   model: string;
   onEvent: (event: StreamEvent) => void;
   provider: LlmProvider;
+  reasoningEffort: ReasoningEffort;
+  signal?: AbortSignal;
   text: string;
+  thinkingMode: ThinkingMode;
 }) {
+  const startedAt = Date.now();
   onEvent({
     type: "stage",
     message: "阶段 1：生成覆盖蓝图",
@@ -694,13 +952,17 @@ async function generateModulePlan({
   });
 
   const truncatedText = text.slice(0, 45_000);
-  const { payload, rawLength } = await streamJsonRequest<ModulePlanResponse>({
+  const { payload, rawLength, usage } = await streamJsonRequest<ModulePlanResponse>({
     apiKey,
+    baseURL,
     model,
     provider,
     maxTokens: 8_000,
     stageLabel: "模块识别",
     onEvent,
+    reasoningEffort,
+    thinkingMode,
+    signal,
     messages: [
       {
         role: "system",
@@ -793,28 +1055,37 @@ ${truncatedText}`,
     message: "覆盖蓝图生成完成",
     detail: `收到 ${rawLength.toLocaleString("zh-CN")} 字符，识别 ${modules.length} 个模块，计划约 ${blueprint.plannedCaseCount.toLocaleString("zh-CN")} 条`,
   });
-  return blueprint;
+  return { blueprint, durationMs: Date.now() - startedAt, usage };
 }
 
 async function generateCasesForModule({
   apiKey,
+  baseURL,
   index,
   model,
   module,
   moduleCount,
   onEvent,
   provider,
+  reasoningEffort,
+  signal,
   text,
+  thinkingMode,
 }: {
   apiKey: string;
+  baseURL?: string;
   index: number;
   model: string;
   module: ModulePlan;
   moduleCount: number;
   onEvent: (event: StreamEvent) => void;
   provider: LlmProvider;
+  reasoningEffort: ReasoningEffort;
+  signal?: AbortSignal;
   text: string;
+  thinkingMode: ThinkingMode;
 }) {
+  const startedAt = Date.now();
   const moduleName = formatModuleName(module);
   const targets = getCaseTargets(module);
   const target = targets.total;
@@ -827,13 +1098,17 @@ async function generateCasesForModule({
     detail: `${moduleName}，${complexityLabels[module.complexity ?? "medium"]} / ${module.riskLevel ?? "medium"}，目标 ${target} 条（${formatTargets(targets)}）`,
   });
 
-  const { payload, rawLength, finishReason } = await streamJsonRequest<CaseBatchResponse>({
+  const { payload, rawLength, finishReason, usage } = await streamJsonRequest<CaseBatchResponse>({
     apiKey,
+    baseURL,
     model,
     provider,
-    maxTokens: Math.min(14_000, Math.max(3_500, target * 420)),
+    maxTokens: getProviderMaxTokens(provider, Math.max(3_500, target * 420), 14_000),
     stageLabel: moduleName,
     onEvent,
+    reasoningEffort,
+    thinkingMode,
+    signal,
     messages: [
       {
         role: "system",
@@ -944,28 +1219,39 @@ ${context}`,
   return {
     cases,
     hitTokenLimit: finishReason === "length",
+    durationMs: Date.now() - startedAt,
+    usage,
   };
 }
 
 async function generateCoverageRepairCasesForModule({
   apiKey,
+  baseURL,
   coverageGaps,
   existingCases,
   model,
   module,
   onEvent,
   provider,
+  reasoningEffort,
+  signal,
   text,
+  thinkingMode,
 }: {
   apiKey: string;
+  baseURL?: string;
   coverageGaps: ReturnType<typeof getCoverageGaps>;
   existingCases: TestCase[];
   model: string;
   module: ModulePlan;
   onEvent: (event: StreamEvent) => void;
   provider: LlmProvider;
+  reasoningEffort: ReasoningEffort;
+  signal?: AbortSignal;
   text: string;
+  thinkingMode: ThinkingMode;
 }) {
+  const startedAt = Date.now();
   const moduleName = formatModuleName(module);
   const context = getRelevantPrdText(text, module);
   const gapText = categories
@@ -979,13 +1265,17 @@ async function generateCoverageRepairCasesForModule({
     detail: `${moduleName} 缺口 ${gapText}${coverageGaps.negativeFunctionalGap ? `，其中逆向功能至少 ${coverageGaps.negativeFunctionalGap} 条` : ""}`,
   });
 
-  const { payload, rawLength, finishReason } = await streamJsonRequest<CaseBatchResponse>({
+  const { payload, rawLength, finishReason, usage } = await streamJsonRequest<CaseBatchResponse>({
     apiKey,
+    baseURL,
     model,
     provider,
-    maxTokens: Math.min(8_000, Math.max(2_500, coverageGaps.totalGap * 520)),
+    maxTokens: getProviderMaxTokens(provider, Math.max(2_500, coverageGaps.totalGap * 520), 8_000),
     stageLabel: `${moduleName} 覆盖补充`,
     onEvent,
+    reasoningEffort,
+    thinkingMode,
+    signal,
     messages: [
       {
         role: "system",
@@ -1073,49 +1363,138 @@ ${context}`,
   return {
     cases,
     hitTokenLimit: finishReason === "length",
+    durationMs: Date.now() - startedAt,
+    usage,
   };
 }
 
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
+  const generationStartedAt = Date.now();
+  const generationStartedIso = new Date(generationStartedAt).toISOString();
+  let provider: LlmProvider = "deepseek";
+  let model = providerDefaults.deepseek.model;
+  let baseURL: string | undefined;
+  let thinkingMode: ThinkingMode = "fast";
+  let reasoningEffort: ReasoningEffort = "medium";
+  let fileName = "未命名 PRD";
+  let sourceTextLength: number | undefined;
+  let totalUsage: GenerationUsage | undefined;
+  let plannedCaseCount: number | undefined;
+  let coverageBlueprint: CoverageBlueprint | undefined;
+  let currentStage = "初始化";
+  let lastProgressEvent: StreamEvent | undefined;
+  let resultSource: "ai" | "fallback" = "ai";
+  const moduleStats: GenerationModuleStats[] = [];
+  const moduleCaseMap = new Map<string, TestCase[]>();
+  const warnings: string[] = [];
 
   return new Response(
     new ReadableStream<Uint8Array>({
       async start(controller) {
-        const onEvent = (event: StreamEvent) => send(controller, encoder, event);
+        const onEvent = (event: StreamEvent) => {
+          if (event.type === "stage" && event.message !== "AI 正在持续生成") currentStage = event.message;
+          if (event.type !== "error" && event.type !== "done") lastProgressEvent = event;
+          send(controller, encoder, event);
+        };
+
+        const buildResultWithStats = (status: "success" | "failed" | "cancelled", result: GenerateResponse) => {
+          const generationCompletedAt = Date.now();
+          const completedIso = new Date(generationCompletedAt).toISOString();
+          const moduleNames = new Set(result.cases.map((item) => item.module));
+          const estimatedCostCny =
+            provider === "aliyun"
+              ? estimateAliyunCostCny(model, thinkingMode, totalUsage)
+              : provider === "deepseek"
+                ? estimateDeepSeekCostCny(model, totalUsage)
+                : null;
+
+          return {
+            ...result,
+            warnings:
+              status === "success"
+                ? result.warnings
+                : [...result.warnings, status === "cancelled" ? "本次运行已由用户停止。" : "本次运行失败，已保存可排查的运行日志。"],
+            stats: {
+              startedAt: generationStartedIso,
+              completedAt: completedIso,
+              durationMs: generationCompletedAt - generationStartedAt,
+              provider,
+              model,
+              ...(provider === "aliyun" ? { thinkingMode } : {}),
+              ...(provider === "openai" || provider === "velotric" ? { reasoningEffort } : {}),
+              ...(totalUsage ? { usage: totalUsage } : {}),
+              estimatedCostCny,
+              sourceTextLength,
+              plannedCaseCount,
+              moduleCount: moduleNames.size,
+              caseCount: result.cases.length,
+              modules: moduleStats.length
+                ? moduleStats
+                : [...moduleNames].map((name) => ({
+                    name,
+                    caseCount: result.cases.filter((item) => item.module === name).length,
+                    durationMs: 0,
+                  })),
+            },
+          } satisfies GenerateResponse;
+        };
+
+        const buildPartialResult = (status: "failed" | "cancelled", errorMessage: string) => {
+          const partialCases = dedupeAndRenumber([...moduleCaseMap.values()].flat());
+          return buildResultWithStats(status, {
+            source: resultSource,
+            fileName,
+            summary:
+              status === "cancelled"
+                ? `本次生成已停止，停止前已解析 ${partialCases.length} 条测试用例。`
+                : `本次生成失败，失败前已解析 ${partialCases.length} 条测试用例。`,
+            cases: partialCases,
+            warnings: [...warnings, errorMessage],
+            ...(coverageBlueprint ? { coverageBlueprint } : {}),
+          });
+        };
 
         try {
           onEvent({ type: "stage", message: "已收到生成请求" });
 
           const formData = await request.formData();
+          assertNotAborted(request.signal);
           const file = formData.get("file");
           const apiKeyValue = formData.get("apiKey");
           const modelValue = formData.get("model");
-          const provider = getProvider(formData.get("provider"));
+          const baseURLValue = formData.get("baseURL");
+          const thinkingModeValue = formData.get("thinkingMode");
+          const reasoningEffortValue = formData.get("reasoningEffort");
+          provider = getProvider(formData.get("provider"));
           const config = providerDefaults[provider];
           const requestApiKey = typeof apiKeyValue === "string" ? apiKeyValue.trim() : "";
           const apiKey = requestApiKey || config.envKey;
-          const model = typeof modelValue === "string" && modelValue.trim() ? modelValue.trim() : config.model;
+          model = typeof modelValue === "string" && modelValue.trim() ? modelValue.trim() : config.model;
+          baseURL = provider === "velotric" && typeof baseURLValue === "string" && baseURLValue.trim() ? baseURLValue.trim() : config.baseURL;
+          thinkingMode = normalizeThinkingMode(typeof thinkingModeValue === "string" ? thinkingModeValue : "fast");
+          reasoningEffort = normalizeReasoningEffort(typeof reasoningEffortValue === "string" ? reasoningEffortValue : "medium");
 
           onEvent({
             type: "stage",
             message: "已读取模型配置",
-            detail: `${config.label} / ${model} / ${apiKey ? "已提供 API Key" : "未提供 API Key"}`,
+            detail: `${providerLabels[provider]} / ${model} / ${
+              provider === "aliyun" ? (thinkingMode === "quality" ? "高质量模式" : "快速模式") : `推理 ${reasoningEffort}`
+            } / ${apiKey ? "已提供 API Key" : "未提供 API Key"}${provider === "velotric" && baseURL ? ` / 网关 ${baseURL}` : ""}`,
           });
 
           if (!(file instanceof File)) {
-            onEvent({ type: "error", message: "请上传 PDF 格式的 PRD 文档。" });
-            return;
+            throw new Error("请上传 PDF 格式的 PRD 文档。");
           }
 
+          fileName = file.name;
+
           if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-            onEvent({ type: "error", message: "仅支持 PDF 文件。" });
-            return;
+            throw new Error("仅支持 PDF 文件。");
           }
 
           if (file.size > 15 * 1024 * 1024) {
-            onEvent({ type: "error", message: "PDF 文件不能超过 15MB。" });
-            return;
+            throw new Error("PDF 文件不能超过 15MB。");
           }
 
           onEvent({
@@ -1125,9 +1504,10 @@ export async function POST(request: Request) {
           });
 
           const text = await extractPdfText(file);
+          assertNotAborted(request.signal);
+          sourceTextLength = text.length;
           if (!text || text.length < 30) {
-            onEvent({ type: "error", message: "未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。" });
-            return;
+            throw new Error("未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。");
           }
 
           onEvent({
@@ -1138,56 +1518,84 @@ export async function POST(request: Request) {
 
           let result: GenerateResponse;
           if (apiKey) {
-            const coverageBlueprint = await generateModulePlan({
+            const planResult = await generateModulePlan({
               apiKey,
+              baseURL,
               fileName: file.name,
               model,
               onEvent,
               provider,
+              reasoningEffort,
+              signal: request.signal,
               text,
+              thinkingMode,
             });
+            totalUsage = addUsage(totalUsage, planResult.usage);
+            coverageBlueprint = planResult.blueprint;
+            plannedCaseCount = coverageBlueprint.plannedCaseCount;
             const modules = coverageBlueprint.modules;
 
             if (!modules.length) throw new Error("模型未能识别出可测试功能模块。");
 
-            const warnings: string[] = [];
-            const allCases: TestCase[] = [];
-
             for (let index = 0; index < modules.length; index += 1) {
+              assertNotAborted(request.signal);
               const currentModule = modules[index];
+              const moduleName = formatModuleName(currentModule);
               const batch = await generateCasesForModule({
                 apiKey,
+                baseURL,
                 index,
                 model,
                 module: currentModule,
                 moduleCount: modules.length,
                 onEvent,
                 provider,
+                reasoningEffort,
+                signal: request.signal,
                 text,
+                thinkingMode,
               });
               let moduleCases = batch.cases;
+              let moduleUsage = batch.usage;
+              let moduleDurationMs = batch.durationMs;
+              totalUsage = addUsage(totalUsage, batch.usage);
+              moduleCaseMap.set(moduleName, moduleCases);
               if (batch.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 输出达到 token 上限，已尽力解析。`);
 
               const coverageGaps = getCoverageGaps(moduleCases, getCaseTargets(currentModule));
               if (coverageGaps.totalGap > 0) {
+                assertNotAborted(request.signal);
                 const repair = await generateCoverageRepairCasesForModule({
                   apiKey,
+                  baseURL,
                   coverageGaps,
                   existingCases: moduleCases,
                   model,
                   module: currentModule,
                   onEvent,
                   provider,
+                  reasoningEffort,
+                  signal: request.signal,
                   text,
+                  thinkingMode,
                 });
                 moduleCases = [...moduleCases, ...repair.cases];
+                moduleCaseMap.set(moduleName, moduleCases);
+                moduleUsage = addUsage(moduleUsage, repair.usage);
+                moduleDurationMs += repair.durationMs;
+                totalUsage = addUsage(totalUsage, repair.usage);
                 if (repair.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 覆盖补充达到 token 上限，已尽力解析。`);
               }
 
-              allCases.push(...moduleCases);
+              moduleStats.push({
+                name: moduleName,
+                caseCount: moduleCases.length,
+                durationMs: moduleDurationMs,
+                ...(moduleUsage ? { usage: moduleUsage } : {}),
+              });
             }
 
-            const cases = dedupeAndRenumber(allCases);
+            const cases = dedupeAndRenumber([...moduleCaseMap.values()].flat());
             result = {
               source: "ai",
               fileName: file.name,
@@ -1197,12 +1605,37 @@ export async function POST(request: Request) {
               coverageBlueprint,
             };
           } else {
+            resultSource = "fallback";
             onEvent({
               type: "stage",
               message: "未检测到 API Key，改用本地规则生成",
               detail: "本次不会调用外部 AI 服务",
             });
             result = generateFallbackCases(text, file.name);
+          }
+
+          result = buildResultWithStats("success", result);
+
+          try {
+            const savedRecord = saveRunHistoryRecord({
+              status: "success",
+              createdAt: generationStartedIso,
+              completedAt: result.stats?.completedAt,
+              provider,
+              model,
+              ...(provider === "aliyun" ? { thinkingMode } : {}),
+              result,
+            });
+            onEvent({
+              type: "stage",
+              message: "运行记录已保存",
+              detail: `SQLite 持久化记录：${savedRecord.id}`,
+            });
+          } catch (saveError) {
+            result = {
+              ...result,
+              warnings: [...result.warnings, `运行记录保存失败：${getErrorMessage(saveError)}`],
+            };
           }
 
           onEvent({
@@ -1214,13 +1647,58 @@ export async function POST(request: Request) {
           onEvent({ type: "done" });
         } catch (error) {
           console.error(error);
-          onEvent({
-            type: "error",
-            message: "生成失败，请检查 API Key、额度、模型名称、模型权限或网络连接。",
-            detail: getErrorMessage(error),
-          });
+          totalUsage = addUsage(totalUsage, getErrorUsage(error));
+          const cancelled = isCancelledError(error) || request.signal.aborted;
+          const errorMessage = cancelled ? "已停止本次生成。" : "生成失败，请检查 API Key、额度、模型名称、模型权限或网络连接。";
+          const errorDetail = cancelled ? "用户主动停止运行，已保存停止前的运行日志。" : getErrorMessage(error);
+          const partialResult = buildPartialResult(cancelled ? "cancelled" : "failed", errorDetail);
+
+          try {
+            const savedRecord = saveRunHistoryRecord({
+              status: cancelled ? "cancelled" : "failed",
+              createdAt: generationStartedIso,
+              completedAt: partialResult.stats?.completedAt,
+              provider,
+              model,
+              ...(provider === "aliyun" ? { thinkingMode } : {}),
+              failedStage: currentStage,
+              errorMessage,
+              errorDetail,
+              errorRaw: serializeError(error),
+              lastEvent: lastProgressEvent,
+              result: partialResult,
+            });
+
+            if (!request.signal.aborted) {
+              onEvent({
+                type: "stage",
+                message: cancelled ? "运行已停止并保存记录" : "失败运行记录已保存",
+                detail: `SQLite 持久化记录：${savedRecord.id}`,
+              });
+            }
+          } catch (saveError) {
+            if (!request.signal.aborted) {
+              onEvent({
+                type: "stage",
+                message: "运行日志保存失败",
+                detail: getErrorMessage(saveError),
+              });
+            }
+          }
+
+          if (!request.signal.aborted) {
+            onEvent({
+              type: "error",
+              message: errorMessage,
+              detail: errorDetail,
+            });
+          }
         } finally {
-          controller.close();
+          try {
+            controller.close();
+          } catch {
+            // The client may have aborted the request before the server closed the stream.
+          }
         }
       },
     }),

@@ -1,31 +1,65 @@
 "use client";
 
-import { useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import Link from "next/link";
 import {
   AlertCircle,
   BookOpen,
   Bot,
+  Brain,
+  Check,
   CheckCircle2,
+  ChevronDown,
+  ChevronRight,
+  Clock3,
+  Database,
   Download,
   Eye,
   EyeOff,
   FileText,
-  History,
   KeyRound,
   ListChecks,
   Loader2,
+  Minimize2,
   PlayCircle,
   Search,
   Shield,
   Sparkles,
+  Square,
   Terminal,
-  Trash2,
   UploadCloud,
   X,
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
+import { downloadExcel } from "@/lib/download-excel";
+import {
+  aliyunModelOptions,
+  deepseekModelOptions,
+  getAliyunModelOption,
+  getAliyunOutputPrice,
+  getDeepSeekModelOption,
+  getOpenAIModelOption,
+  getVelotricModelOption,
+  normalizeProvider,
+  normalizeThinkingMode,
+  openaiModelOptions,
+  providerBaseURLs,
+  providerLabels,
+  providerModels,
+  reasoningEffortDescriptions,
+  reasoningEffortLabels,
+  reasoningEffortOptions,
+  thinkingModeDescriptions,
+  thinkingModeLabels,
+  velotricModelOptions,
+  type Provider,
+  type ReasoningEffort,
+  type ThinkingMode,
+  normalizeReasoningEffort,
+} from "@/lib/model-config";
+import { formatDuration, formatTokens, refreshRunHistory, storageChangeEvent, subscribeStorage, useRunHistory } from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type { Complexity, CoverageModule, GenerateResponse, RiskLevel, TestCase, TestCategory } from "@/types/test-case";
 
@@ -47,18 +81,6 @@ const categoryIcons = {
   性能: Zap,
 };
 
-const providerModels = {
-  deepseek: "deepseek-v4-flash",
-  aliyun: "qwen-plus",
-  openai: "gpt-4.1-mini",
-};
-
-const providerLabels = {
-  deepseek: "DeepSeek",
-  aliyun: "阿里云百炼",
-  openai: "OpenAI",
-};
-
 const complexityLabels: Record<Complexity, string> = {
   minimal: "极简",
   simple: "简单",
@@ -74,15 +96,11 @@ const riskLabels: Record<RiskLevel, string> = {
   critical: "关键风险",
 };
 
-type Provider = keyof typeof providerModels;
-
 const storageKeys = {
   provider: "testmind.provider",
-  runHistory: "testmind.runHistory.v1",
 };
 
-const storageChangeEvent = "testmind.storage-change";
-const maxRunHistory = 8;
+const providerOptions: Provider[] = ["deepseek", "aliyun", "openai", "velotric"];
 
 function apiKeyStorageKey(provider: Provider) {
   return `testmind.${provider}.apiKey`;
@@ -90,6 +108,18 @@ function apiKeyStorageKey(provider: Provider) {
 
 function modelStorageKey(provider: Provider) {
   return `testmind.${provider}.model`;
+}
+
+function thinkingModeStorageKey(provider: Provider) {
+  return `testmind.${provider}.thinkingMode`;
+}
+
+function baseURLStorageKey(provider: Provider) {
+  return `testmind.${provider}.baseURL`;
+}
+
+function reasoningEffortStorageKey(provider: Provider) {
+  return `testmind.${provider}.reasoningEffort`;
 }
 
 function readStoredValue(key: string, fallback: string) {
@@ -118,27 +148,12 @@ function writeStoredValue(key: string, value: string) {
   }
 }
 
-function subscribeStorage(callback: () => void) {
-  if (typeof window === "undefined") return () => {};
-
-  window.addEventListener("storage", callback);
-  window.addEventListener(storageChangeEvent, callback);
-  return () => {
-    window.removeEventListener("storage", callback);
-    window.removeEventListener(storageChangeEvent, callback);
-  };
-}
-
 function useStoredValue(key: string, fallback: string) {
   return useSyncExternalStore(
     subscribeStorage,
     () => readStoredValue(key, fallback),
     () => fallback,
   );
-}
-
-function normalizeProvider(value: string): Provider {
-  return value === "aliyun" || value === "openai" || value === "deepseek" ? value : "deepseek";
 }
 
 function useStoredProvider() {
@@ -157,165 +172,161 @@ function useClientReady() {
   );
 }
 
-type ProgressStatus = "idle" | "running" | "success" | "error";
+type CustomSelectOption = {
+  value: string;
+  label: string;
+  badge?: string;
+  description?: string;
+};
+
+function CustomSelect({
+  label,
+  options,
+  value,
+  onChange,
+}: {
+  label: string;
+  options: CustomSelectOption[];
+  value: string;
+  onChange: (value: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((item) => item.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+
+    const close = (event: MouseEvent) => {
+      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
+    };
+    window.addEventListener("mousedown", close);
+    return () => window.removeEventListener("mousedown", close);
+  }, [open]);
+
+  return (
+    <div ref={rootRef} className="relative">
+      <span className="text-xs font-medium text-slate-500">{label}</span>
+      <button
+        aria-expanded={open}
+        className={clsx(
+          "mt-1 flex min-h-10 w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left text-sm outline-none transition",
+          open ? "border-teal-500 ring-2 ring-teal-100" : "border-slate-200 hover:border-slate-300",
+        )}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="min-w-0">
+          <span className="block truncate font-medium text-slate-900">{selected?.label}</span>
+          {selected?.description ? <span className="mt-0.5 block truncate text-xs text-slate-400">{selected.description}</span> : null}
+        </span>
+        <ChevronDown className={clsx("size-4 shrink-0 text-slate-500 transition", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+          <div className="max-h-72 overflow-y-auto">
+            {options.map((item) => {
+              const active = item.value === selected?.value;
+              return (
+                <button
+                  key={item.value}
+                  className={clsx(
+                    "flex w-full items-start justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition",
+                    active ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-50",
+                  )}
+                  type="button"
+                  onClick={() => {
+                    onChange(item.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2">
+                      <span className="truncate font-medium">{item.label}</span>
+                      {item.badge ? (
+                        <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-xs", active ? "bg-white/15 text-white" : "bg-teal-50 text-teal-700")}>
+                          {item.badge}
+                        </span>
+                      ) : null}
+                    </span>
+                    {item.description ? <span className={clsx("mt-1 block text-xs leading-5", active ? "text-slate-300" : "text-slate-400")}>{item.description}</span> : null}
+                  </span>
+                  {active ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+type ProgressStatus = "idle" | "running" | "success" | "error" | "cancelled";
 
 type ProgressLog = {
   id: string;
-  type: "stage" | "error";
+  type: "stage" | "thinking" | "error" | "cancelled";
   message: string;
   detail?: string;
 };
 
 type StreamEvent =
   | { type: "stage"; message: string; detail?: string }
+  | { type: "thinking"; message: string; detail?: string }
   | { type: "chunk"; content: string }
   | { type: "result"; data: GenerateResponse }
   | { type: "error"; message: string; detail?: string }
   | { type: "done" };
 
-type RunHistoryRecord = {
-  id: string;
-  createdAt: string;
-  fileName: string;
-  provider: Provider;
-  model: string;
-  caseCount: number;
-  result: GenerateResponse;
-};
-
-const emptyRunHistory: RunHistoryRecord[] = [];
-let runHistoryCacheKey = "";
-let runHistoryCacheValue: RunHistoryRecord[] = emptyRunHistory;
-
-function readRunHistory(): RunHistoryRecord[] {
-  if (typeof window === "undefined") return emptyRunHistory;
-
-  try {
-    const raw = window.localStorage.getItem(storageKeys.runHistory) || "";
-    if (raw === runHistoryCacheKey) return runHistoryCacheValue;
-    if (!raw) {
-      runHistoryCacheKey = raw;
-      runHistoryCacheValue = emptyRunHistory;
-      return runHistoryCacheValue;
-    }
-    const parsed = JSON.parse(raw) as RunHistoryRecord[];
-    if (!Array.isArray(parsed)) {
-      runHistoryCacheKey = raw;
-      runHistoryCacheValue = emptyRunHistory;
-      return runHistoryCacheValue;
-    }
-    runHistoryCacheKey = raw;
-    runHistoryCacheValue = parsed
-      .filter((item) => item?.id && item?.result && Array.isArray(item.result.cases))
-      .slice(0, maxRunHistory);
-    return runHistoryCacheValue;
-  } catch {
-    return runHistoryCacheValue;
-  }
+function getNowMs() {
+  return Date.now();
 }
 
-function writeRunHistory(records: RunHistoryRecord[]) {
-  if (typeof window === "undefined") return false;
+function useTicker(active: boolean) {
+  const [now, setNow] = useState(0);
 
-  let nextRecords = records.slice(0, maxRunHistory);
-  while (nextRecords.length) {
-    try {
-      window.localStorage.setItem(storageKeys.runHistory, JSON.stringify(nextRecords));
-      window.dispatchEvent(new Event(storageChangeEvent));
-      return true;
-    } catch {
-      nextRecords = nextRecords.slice(0, -1);
-    }
-  }
+  useEffect(() => {
+    if (!active) return;
+    const timer = window.setInterval(() => setNow(getNowMs()), 1000);
+    return () => window.clearInterval(timer);
+  }, [active]);
 
-  try {
-    window.localStorage.removeItem(storageKeys.runHistory);
-    window.dispatchEvent(new Event(storageChangeEvent));
-  } catch {
-    // Ignore storage errors such as private browsing quota restrictions.
-  }
-  return false;
-}
-
-function saveRunHistoryRecord(result: GenerateResponse, provider: Provider, model: string) {
-  const record: RunHistoryRecord = {
-    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
-    createdAt: new Date().toISOString(),
-    fileName: result.fileName,
-    provider,
-    model,
-    caseCount: result.cases.length,
-    result,
-  };
-  const saved = writeRunHistory([record, ...readRunHistory().filter((item) => item.id !== record.id)]);
-  return saved ? record : null;
-}
-
-function removeRunHistoryRecord(id: string) {
-  writeRunHistory(readRunHistory().filter((item) => item.id !== id));
-}
-
-function clearRunHistory() {
-  writeRunHistory([]);
-}
-
-function useRunHistory() {
-  return useSyncExternalStore(
-    subscribeStorage,
-    readRunHistory,
-    () => emptyRunHistory,
-  );
-}
-
-function formatRunTime(value: string) {
-  const date = new Date(value);
-  if (Number.isNaN(date.getTime())) return "未知时间";
-  return date.toLocaleString("zh-CN", {
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-  });
-}
-
-async function downloadExcel(data: GenerateResponse) {
-  const response = await fetch("/api/export/excel", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(data),
-  });
-
-  if (!response.ok) {
-    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
-    throw new Error(payload?.message || "Excel 导出失败，请稍后重试。");
-  }
-
-  const blob = await response.blob();
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${data.fileName.replace(/\.pdf$/i, "")}-test-cases.xlsx`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+  return now;
 }
 
 function GenerationProgressModal({
+  elapsedMs,
   error,
+  idleContentMs,
+  idleEventMs,
   logs,
+  onStop,
   onClose,
   open,
   status,
   streamPreview,
   totalChars,
 }: {
+  elapsedMs: number;
   error: string;
+  idleContentMs: number;
+  idleEventMs: number;
   logs: ProgressLog[];
+  onStop: () => void;
   onClose: () => void;
   open: boolean;
   status: ProgressStatus;
   streamPreview: string;
   totalChars: number;
 }) {
+  const streamRef = useRef<HTMLPreElement>(null);
+
+  useEffect(() => {
+    if (!open || !streamRef.current) return;
+    streamRef.current.scrollTop = streamRef.current.scrollHeight;
+  }, [open, streamPreview]);
+
   if (!open) return null;
 
   const statusText: Record<ProgressStatus, string> = {
@@ -323,7 +334,10 @@ function GenerationProgressModal({
     running: "生成中",
     success: "已完成",
     error: "失败",
+    cancelled: "已停止",
   };
+  const idleContentSeconds = Math.max(0, Math.round(idleContentMs / 1000));
+  const idleEventSeconds = Math.max(0, Math.round(idleEventMs / 1000));
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
@@ -335,19 +349,31 @@ function GenerationProgressModal({
             </div>
             <div>
               <h2 className="font-semibold">AI 生成过程</h2>
-              <p className="mt-0.5 text-sm text-slate-500">{statusText[status]}</p>
+              <p className="mt-0.5 text-sm text-slate-500">
+                {statusText[status]} · 已运行 {formatDuration(elapsedMs)}
+              </p>
             </div>
           </div>
-          {status === "error" ? (
+          <div className="flex items-center gap-2">
+            {status === "running" ? (
+              <button
+                className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
+                type="button"
+                onClick={onStop}
+              >
+                <Square className="size-3.5 fill-current" />
+                停止运行
+              </button>
+            ) : null}
             <button
-              aria-label="关闭"
+              aria-label={status === "running" ? "最小化" : "关闭"}
               className="grid size-9 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
               type="button"
               onClick={onClose}
             >
-              <X className="size-5" />
+              {status === "running" ? <Minimize2 className="size-5" /> : <X className="size-5" />}
             </button>
-          ) : null}
+          </div>
         </div>
 
         <div className="grid min-h-0 flex-1 gap-4 overflow-hidden p-5 lg:grid-cols-[320px_minmax(0,1fr)]">
@@ -362,7 +388,13 @@ function GenerationProgressModal({
                   key={item.id}
                   className={clsx(
                     "rounded-lg border bg-white p-3 text-sm",
-                    item.type === "error" ? "border-rose-200 text-rose-700" : "border-slate-200 text-slate-700",
+                    item.type === "error"
+                      ? "border-rose-200 text-rose-700"
+                      : item.type === "cancelled"
+                        ? "border-amber-200 text-amber-800"
+                        : item.type === "thinking"
+                        ? "border-amber-200 text-amber-800"
+                        : "border-slate-200 text-slate-700",
                   )}
                 >
                   <p className="font-medium">{item.message}</p>
@@ -379,15 +411,25 @@ function GenerationProgressModal({
                 已接收 {totalChars.toLocaleString("zh-CN")} / 展示最近 {streamPreview.length.toLocaleString("zh-CN")}
               </span>
             </div>
-            <pre className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/25 p-3 text-xs leading-5 text-slate-200">
+            <div className="mt-3 rounded-md border border-white/10 bg-white/5 px-3 py-2 text-xs leading-5 text-slate-300">
+              {status === "running" && idleContentMs > 15_000
+                ? `已 ${idleContentSeconds} 秒没有收到可展示内容，模型可能仍在推理、排队或组织 JSON；连接仍在等待。`
+                : `最近事件 ${idleEventSeconds} 秒前，实时输出会自动滚动到底部。`}
+            </div>
+            <pre ref={streamRef} className="mt-3 min-h-0 flex-1 overflow-auto whitespace-pre-wrap break-words rounded-md bg-black/25 p-3 text-xs leading-5 text-slate-200">
               {streamPreview || "等待模型返回内容..."}
             </pre>
           </section>
         </div>
 
-        {status === "error" ? (
-          <div className="border-t border-rose-100 bg-rose-50 px-5 py-3 text-sm text-rose-700">
-            {error || "生成失败，请检查模型配置后重试。"}
+        {status === "error" || status === "cancelled" ? (
+          <div
+            className={clsx(
+              "border-t px-5 py-3 text-sm",
+              status === "cancelled" ? "border-amber-100 bg-amber-50 text-amber-800" : "border-rose-100 bg-rose-50 text-rose-700",
+            )}
+          >
+            {error || (status === "cancelled" ? "已停止本次生成。" : "生成失败，请检查模型配置后重试。")}
           </div>
         ) : null}
       </div>
@@ -405,7 +447,8 @@ function ApiKeyConfigSkeleton() {
         </div>
         <span className="h-6 w-20 animate-pulse rounded-full bg-white ring-1 ring-slate-200" />
       </div>
-      <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200">
+      <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200">
+        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
         <span className="h-8 animate-pulse rounded-md bg-slate-100" />
         <span className="h-8 animate-pulse rounded-md bg-slate-100" />
         <span className="h-8 animate-pulse rounded-md bg-slate-100" />
@@ -471,81 +514,313 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
   );
 }
 
-function RunHistoryPanel({
-  activeRunId,
-  history,
-  onClear,
-  onDelete,
-  onLoad,
-}: {
-  activeRunId: string;
-  history: RunHistoryRecord[];
-  onClear: () => void;
-  onDelete: (id: string) => void;
-  onLoad: (record: RunHistoryRecord) => void;
-}) {
+function RunHistoryEntryCard({ count }: { count: number }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2">
-          <History className="size-4 text-teal-700" />
-          <h2 className="font-semibold">运行记录</h2>
+    <Link
+      className="group flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+      href="/history"
+    >
+      <span className="flex min-w-0 items-center gap-3">
+        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white">
+          <Database className="size-4" />
+        </span>
+        <span className="min-w-0">
+          <span className="block text-sm font-semibold text-slate-800">查看运行记录</span>
+          <span className="mt-0.5 block truncate text-xs text-slate-500">{count ? `数据库已保存 ${count} 次生成结果` : "生成成功后会自动持久化到本地数据库"}</span>
+        </span>
+      </span>
+      <ChevronRight className="size-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-700" />
+    </Link>
+  );
+}
+
+function formatCost(value?: number | null) {
+  if (value === null || value === undefined) return "未估算";
+  if (value < 0.01) return `¥${value.toFixed(4)}`;
+  return `¥${value.toFixed(2)}`;
+}
+
+function RunStatsPanel({ result }: { result: GenerateResponse | null }) {
+  const stats = result?.stats;
+  if (!stats) return null;
+
+  const modules = stats.modules.slice(0, 10);
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <Clock3 className="size-4" />
+            运行统计
+          </div>
+          <p className="mt-2 text-sm leading-6 text-slate-500">
+            {providerLabels[stats.provider]} / {stats.model}
+            {stats.thinkingMode ? ` / ${thinkingModeLabels[stats.thinkingMode]}` : ""}
+            {stats.reasoningEffort ? ` / 推理${reasoningEffortLabels[stats.reasoningEffort]}` : ""}
+          </p>
         </div>
-        {history.length ? (
-          <button className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-900" type="button" onClick={onClear}>
-            清空
-          </button>
+        <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
+          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">耗时</p>
+            <p className="mt-1 font-semibold text-slate-800">{formatDuration(stats.durationMs)}</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">Token</p>
+            <p className="mt-1 font-semibold text-slate-800">{formatTokens(stats.usage?.totalTokens)}</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">模块</p>
+            <p className="mt-1 font-semibold text-slate-800">{stats.moduleCount} 个</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">估算费用</p>
+            <p className="mt-1 font-semibold text-slate-800">{formatCost(stats.estimatedCostCny)}</p>
+          </div>
+        </div>
+      </div>
+      <div className="mt-4 flex flex-wrap gap-2">
+        {modules.map((module) => (
+          <span key={module.name} className="max-w-full rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+            <span className="break-words">{module.name}</span> · {module.caseCount} 条
+          </span>
+        ))}
+        {stats.modules.length > modules.length ? (
+          <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-400 ring-1 ring-slate-200">
+            还有 {stats.modules.length - modules.length} 个模块
+          </span>
         ) : null}
       </div>
+    </section>
+  );
+}
 
-      {history.length ? (
-        <div className="mt-4 max-h-96 space-y-2 overflow-auto pr-1">
-          {history.map((record) => (
-            <div
-              key={record.id}
-              className={clsx(
-                "rounded-lg border transition",
-                activeRunId === record.id ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
-              )}
-            >
-              <div className="flex items-stretch gap-1 p-3">
-                <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onLoad(record)}>
-                  <div className="flex items-start justify-between gap-3">
-                    <div className="min-w-0">
-                      <p className="truncate text-sm font-medium">{record.fileName}</p>
-                      <p className={clsx("mt-1 text-xs", activeRunId === record.id ? "text-slate-300" : "text-slate-500")}>
-                        {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {record.caseCount} 条
-                      </p>
-                    </div>
-                    <span
-                      className={clsx(
-                        "shrink-0 rounded-full px-2 py-1 text-xs ring-1",
-                        activeRunId === record.id ? "bg-white/10 text-white ring-white/20" : "bg-white text-slate-500 ring-slate-200",
-                      )}
-                    >
-                      {record.result.source === "ai" ? "AI" : "本地"}
-                    </span>
-                  </div>
-                  <p className={clsx("mt-2 truncate text-xs", activeRunId === record.id ? "text-slate-300" : "text-slate-400")}>{record.model}</p>
-                </button>
-                <button
-                  aria-label="删除运行记录"
-                  className={clsx(
-                    "grid size-8 shrink-0 place-items-center rounded-md opacity-70 transition hover:opacity-100",
-                    activeRunId === record.id ? "hover:bg-white/10" : "hover:bg-slate-100",
-                  )}
-                  type="button"
-                  onClick={() => onDelete(record.id)}
-                >
-                  <Trash2 className="size-3.5" />
-                </button>
-              </div>
+function AliyunModelConfig({
+  model,
+  onModelChange,
+  onThinkingModeChange,
+  thinkingMode,
+}: {
+  model: string;
+  onModelChange: (value: string) => void;
+  onThinkingModeChange: (value: ThinkingMode) => void;
+  thinkingMode: ThinkingMode;
+}) {
+  const selected = getAliyunModelOption(model);
+  const outputPrice = getAliyunOutputPrice(model, thinkingMode);
+
+  return (
+    <div className="mt-3 space-y-3">
+      <CustomSelect
+        label="模型选择"
+        options={aliyunModelOptions.map((item) => ({
+          value: item.id,
+          label: item.id,
+          badge: item.badge,
+          description: item.suitableFor,
+        }))}
+        value={selected.id}
+        onChange={onModelChange}
+      />
+
+      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              {selected.name}
+              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
             </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-400">
+          参考单价：输入 ¥{selected.pricing.inputPerMTokens}/百万 Token，输出 ¥{outputPrice}/百万 Token，以阿里云账单为准。
+        </p>
+      </div>
+
+      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <Brain className="size-4 text-teal-700" />
+          生成模式
+        </div>
+        <div className="mt-3 grid grid-cols-2 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
+          {(["fast", "quality"] as const).map((item) => (
+            <button
+              key={item}
+              className={clsx(
+                "min-h-8 rounded-md px-2 text-sm font-medium transition",
+                thinkingMode === item ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white",
+              )}
+              type="button"
+              onClick={() => onThinkingModeChange(item)}
+            >
+              {thinkingModeLabels[item]}
+            </button>
           ))}
         </div>
-      ) : (
-        <p className="mt-3 text-sm leading-6 text-slate-500">生成成功后会自动保存最近 {maxRunHistory} 次结果，刷新页面后也能继续查看。</p>
-      )}
+        <p className="mt-2 text-xs leading-5 text-slate-500">{thinkingModeDescriptions[thinkingMode]}</p>
+      </div>
+    </div>
+  );
+}
+
+function DeepSeekModelConfig({ model, onModelChange }: { model: string; onModelChange: (value: string) => void }) {
+  const selected = getDeepSeekModelOption(model);
+
+  return (
+    <div className="mt-3 space-y-3">
+      <CustomSelect
+        label="模型选择"
+        options={deepseekModelOptions.map((item) => ({
+          value: item.id,
+          label: item.id,
+          badge: item.badge,
+          description: item.suitableFor,
+        }))}
+        value={selected.id}
+        onChange={onModelChange}
+      />
+
+      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              {selected.name}
+              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-400">
+          参考单价：输入缓存命中 ¥{selected.pricing.inputCacheHitPerMTokens}/百万 Token，输入未命中 ¥{selected.pricing.inputCacheMissPerMTokens}/百万 Token，输出 ¥{selected.pricing.outputPerMTokens}/百万 Token。
+        </p>
+        {selected.pricing.discountedUntil ? (
+          <p className="mt-1 text-xs leading-5 text-amber-700">
+            当前为优惠价，优惠至 {selected.pricing.discountedUntil}；原价输入未命中 ¥{selected.pricing.originalInputCacheMissPerMTokens}/百万 Token，输出 ¥{selected.pricing.originalOutputPerMTokens}/百万 Token。
+          </p>
+        ) : null}
+      </div>
+    </div>
+  );
+}
+
+function OpenAIModelConfig({ model, onModelChange }: { model: string; onModelChange: (value: string) => void }) {
+  const selected = getOpenAIModelOption(model);
+
+  return (
+    <div className="mt-3 space-y-3">
+      <CustomSelect
+        label="模型选择"
+        options={openaiModelOptions.map((item) => ({
+          value: item.id,
+          label: item.id,
+          badge: item.badge,
+          description: item.suitableFor,
+        }))}
+        value={selected.id}
+        onChange={onModelChange}
+      />
+
+      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              {selected.name}
+              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
+      </div>
+    </div>
+  );
+}
+
+function ReasoningEffortConfig({
+  reasoningEffort,
+  onReasoningEffortChange,
+}: {
+  reasoningEffort: ReasoningEffort;
+  onReasoningEffortChange: (value: ReasoningEffort) => void;
+}) {
+  return (
+    <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+        <Brain className="size-4 text-teal-700" />
+        推理等级
+      </div>
+      <div className="mt-3">
+        <CustomSelect
+          label="智能"
+          options={reasoningEffortOptions.map((item) => ({
+            value: item,
+            label: reasoningEffortLabels[item],
+            badge: item === "medium" ? "默认" : undefined,
+            description: reasoningEffortDescriptions[item],
+          }))}
+          value={reasoningEffort}
+          onChange={(value) => onReasoningEffortChange(normalizeReasoningEffort(value))}
+        />
+      </div>
+      <p className="mt-2 text-xs leading-5 text-slate-500">{reasoningEffortDescriptions[reasoningEffort]}</p>
+    </div>
+  );
+}
+
+function VelotricGatewayConfig({
+  baseURL,
+  model,
+  onBaseURLChange,
+  onModelChange,
+}: {
+  baseURL: string;
+  model: string;
+  onBaseURLChange: (value: string) => void;
+  onModelChange: (value: string) => void;
+}) {
+  const selected = getVelotricModelOption(model);
+
+  return (
+    <div className="mt-3 space-y-3">
+      <label className="block">
+        <span className="text-xs font-medium text-slate-500">公司网关地址</span>
+        <input
+          className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
+          placeholder={providerBaseURLs.velotric}
+          value={baseURL}
+          spellCheck={false}
+          onChange={(event) => onBaseURLChange(event.target.value)}
+        />
+      </label>
+
+      <CustomSelect
+        label="模型选择"
+        options={velotricModelOptions.map((item) => ({
+          value: item.id,
+          label: item.id,
+          badge: item.badge,
+          description: item.suitableFor,
+        }))}
+        value={selected.id}
+        onChange={onModelChange}
+      />
+
+      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
+              {selected.name}
+              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
+            </div>
+            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
+          </div>
+        </div>
+        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
+      </div>
     </div>
   );
 }
@@ -657,6 +932,7 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [activeModule, setActiveModule] = useState("全部");
@@ -670,8 +946,10 @@ export default function Home() {
   const provider = useStoredProvider();
   const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
   const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
+  const baseURL = useStoredValue(baseURLStorageKey(provider), providerBaseURLs[provider] ?? "");
+  const thinkingMode = normalizeThinkingMode(useStoredValue(thinkingModeStorageKey(provider), "fast"));
+  const reasoningEffort = normalizeReasoningEffort(useStoredValue(reasoningEffortStorageKey(provider), "medium"));
   const runHistory = useRunHistory();
-  const [activeRunId, setActiveRunId] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>("idle");
@@ -679,8 +957,16 @@ export default function Home() {
   const [streamPreview, setStreamPreview] = useState("");
   const [receivedChars, setReceivedChars] = useState(0);
   const [progressError, setProgressError] = useState("");
+  const [runStartedAt, setRunStartedAt] = useState(0);
+  const [runCompletedAt, setRunCompletedAt] = useState(0);
+  const [lastContentAt, setLastContentAt] = useState(0);
+  const [lastEventAt, setLastEventAt] = useState(0);
+  const now = useTicker(isLoading || progressOpen);
   const isDemoResult = result?.source === "demo";
   const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "本地可运行";
+  const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
+  const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
+  const idleEventMs = lastEventAt ? now - lastEventAt : elapsedMs;
 
   const visibleCases = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -746,7 +1032,6 @@ export default function Home() {
     if (!nextFile) return;
     setError("");
     setResult(null);
-    setActiveRunId("");
     setActiveModule("全部");
     setActiveCategory("全部");
     setFile(nextFile);
@@ -756,10 +1041,25 @@ export default function Home() {
     writeStoredValue(apiKeyStorageKey(provider), "");
   }
 
+  function selectProvider(nextProvider: Provider) {
+    writeStoredValue(storageKeys.provider, nextProvider);
+    if (!readStoredValue(modelStorageKey(nextProvider), "")) {
+      writeStoredValue(modelStorageKey(nextProvider), providerModels[nextProvider]);
+    }
+    if (!readStoredValue(thinkingModeStorageKey(nextProvider), "")) {
+      writeStoredValue(thinkingModeStorageKey(nextProvider), "fast");
+    }
+    if (!readStoredValue(reasoningEffortStorageKey(nextProvider), "")) {
+      writeStoredValue(reasoningEffortStorageKey(nextProvider), "medium");
+    }
+    if (providerBaseURLs[nextProvider] && !readStoredValue(baseURLStorageKey(nextProvider), "")) {
+      writeStoredValue(baseURLStorageKey(nextProvider), providerBaseURLs[nextProvider]);
+    }
+  }
+
   function loadDemoCase() {
     setError("");
     setFile(null);
-    setActiveRunId("");
     setResult(demoGenerateResponse);
     setActiveModule("全部");
     setActiveCategory("全部");
@@ -770,32 +1070,10 @@ export default function Home() {
     setStreamPreview("");
     setReceivedChars(0);
     setProgressLogs([]);
-  }
-
-  function loadRunRecord(record: RunHistoryRecord) {
-    setError("");
-    setFile(null);
-    setResult(record.result);
-    setActiveRunId(record.id);
-    setActiveModule("全部");
-    setActiveCategory("全部");
-    setQuery("");
-    setProgressOpen(false);
-    setProgressStatus("idle");
-    setProgressError("");
-    setStreamPreview("");
-    setReceivedChars(0);
-    setProgressLogs([]);
-  }
-
-  function deleteRunRecord(id: string) {
-    removeRunHistoryRecord(id);
-    if (activeRunId === id) setActiveRunId("");
-  }
-
-  function deleteAllRunRecords() {
-    clearRunHistory();
-    setActiveRunId("");
+    setRunStartedAt(0);
+    setRunCompletedAt(0);
+    setLastContentAt(0);
+    setLastEventAt(0);
   }
 
   async function exportExcel() {
@@ -813,6 +1091,11 @@ export default function Home() {
   }
 
   async function generate() {
+    if (isLoading) {
+      setProgressOpen(true);
+      return;
+    }
+
     if (!isClientReady) {
       setError("正在读取本机保存的模型配置，请稍后再试。");
       return;
@@ -824,8 +1107,12 @@ export default function Home() {
     }
 
     setIsLoading(true);
+    const startedAt = getNowMs();
+    setRunStartedAt(startedAt);
+    setRunCompletedAt(0);
+    setLastContentAt(0);
+    setLastEventAt(startedAt);
     setError("");
-    setActiveRunId("");
     setProgressOpen(true);
     setProgressStatus("running");
     setProgressError("");
@@ -836,22 +1123,32 @@ export default function Home() {
         id: "start",
         type: "stage",
         message: "准备开始生成",
-        detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}`,
+        detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
+          provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
+        }`,
       },
     ]);
     const formData = new FormData();
     formData.append("file", file);
     formData.append("provider", provider);
     formData.append("model", model.trim() || providerModels[provider]);
+    formData.append("thinkingMode", thinkingMode);
+    formData.append("reasoningEffort", reasoningEffort);
+    if (provider === "velotric") {
+      formData.append("baseURL", baseURL.trim() || providerBaseURLs.velotric || "");
+    }
     const trimmedApiKey = apiKey.trim();
     if (trimmedApiKey) {
       formData.append("apiKey", trimmedApiKey);
     }
 
     try {
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
       const response = await fetch("/api/generate/stream", {
         method: "POST",
         body: formData,
+        signal: abortController.signal,
       });
 
       if (!response.ok || !response.body) {
@@ -875,13 +1172,22 @@ export default function Home() {
           if (!line.trim()) continue;
           const event = JSON.parse(line) as StreamEvent;
           if (event.type === "stage") {
+            setLastEventAt(getNowMs());
             appendProgressLog("stage", event.message, event.detail);
           }
+          if (event.type === "thinking") {
+            setLastEventAt(getNowMs());
+            appendProgressLog("thinking", event.message, event.detail);
+          }
           if (event.type === "chunk") {
+            const eventTime = getNowMs();
+            setLastEventAt(eventTime);
+            setLastContentAt(eventTime);
             setReceivedChars((current) => current + event.content.length);
             setStreamPreview((current) => `${current}${event.content}`.slice(-16_000));
           }
           if (event.type === "result") {
+            setLastEventAt(getNowMs());
             finalResult = event.data;
             setResult(event.data);
           }
@@ -895,24 +1201,40 @@ export default function Home() {
 
       if (!finalResult) throw new Error("生成结束但没有收到测试用例结果。");
 
-      const savedRecord = saveRunHistoryRecord(finalResult, provider, model.trim() || providerModels[provider]);
-      if (savedRecord) {
-        setActiveRunId(savedRecord.id);
-      } else {
-        setError("测试用例已生成，但浏览器存储空间不足，未能保存本次运行记录。");
-      }
+      await refreshRunHistory();
       setProgressStatus("success");
+      setRunCompletedAt(getNowMs());
       setActiveModule("全部");
       setActiveCategory("全部");
       window.setTimeout(() => setProgressOpen(false), 900);
     } catch (caught) {
-      const message = caught instanceof Error ? caught.message : "生成失败";
-      setError(message);
-      setProgressStatus("error");
-      setProgressError((current) => current || message);
+      const isAbort = caught instanceof Error && caught.name === "AbortError";
+      const message = isAbort ? "已停止本次生成。" : caught instanceof Error ? caught.message : "生成失败";
+      if (isAbort) {
+        setError("");
+        setProgressStatus("cancelled");
+        setProgressError("已停止本次生成，运行日志会保存在历史记录中。");
+        refreshRunHistory();
+        window.setTimeout(() => refreshRunHistory(), 1500);
+      } else {
+        setError(message);
+        setProgressStatus("error");
+        setProgressError((current) => current || message);
+      }
+      setRunCompletedAt(getNowMs());
     } finally {
+      abortControllerRef.current = null;
       setIsLoading(false);
     }
+  }
+
+  function stopGeneration() {
+    if (!isLoading || !abortControllerRef.current) return;
+    abortControllerRef.current.abort();
+    setProgressStatus("cancelled");
+    setProgressError("正在停止本次生成，停止前的运行日志会保存到历史记录。");
+    setRunCompletedAt(getNowMs());
+    appendProgressLog("cancelled", "已请求停止生成", "正在中断模型流式请求，后端会记录停止前的阶段和已生成内容。");
   }
 
   function appendProgressLog(type: ProgressLog["type"], message: string, detail?: string) {
@@ -924,7 +1246,7 @@ export default function Home() {
         detail,
       };
 
-      if (message === "AI 正在持续生成") {
+      if (message === "AI 正在持续生成" || message === "模型正在思考") {
         const existingIndex = current.findIndex((item) => item.message === message);
         if (existingIndex >= 0) {
           return current.map((item, index) => (index === existingIndex ? { ...item, detail } : item));
@@ -938,14 +1260,32 @@ export default function Home() {
   return (
     <main className="min-h-screen bg-[#f7f4ef] text-slate-950">
       <GenerationProgressModal
+        elapsedMs={elapsedMs}
         error={progressError}
+        idleContentMs={idleContentMs}
+        idleEventMs={idleEventMs}
         logs={progressLogs}
         onClose={() => setProgressOpen(false)}
+        onStop={stopGeneration}
         open={progressOpen}
         status={progressStatus}
         streamPreview={streamPreview}
         totalChars={receivedChars}
       />
+
+      {isLoading && !progressOpen ? (
+        <button
+          className="fixed bottom-5 right-5 z-40 inline-flex items-center gap-3 rounded-lg bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white shadow-xl ring-1 ring-white/10 transition hover:bg-slate-800"
+          type="button"
+          onClick={() => setProgressOpen(true)}
+        >
+          <Loader2 className="size-4 animate-spin" />
+          <span>
+            <span className="block">AI 正在生成</span>
+            <span className="mt-0.5 block text-xs font-normal text-slate-300">已运行 {formatDuration(elapsedMs)}，点击查看过程</span>
+          </span>
+        </button>
+      ) : null}
 
       <section className="border-b border-slate-200/80 bg-white/80 backdrop-blur">
         <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
@@ -1014,25 +1354,25 @@ export default function Home() {
                     {providerLabels[provider]}
                   </span>
                 </div>
-                <div className="mt-3 grid grid-cols-3 rounded-lg bg-white p-1 ring-1 ring-slate-200">
-                  {(["deepseek", "aliyun", "openai"] as const).map((item) => (
-                    <button
-                      key={item}
-                      className={clsx(
-                        "h-8 rounded-md text-sm font-medium transition",
-                        provider === item ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50",
-                      )}
-                      type="button"
-                      onClick={() => {
-                        writeStoredValue(storageKeys.provider, item);
-                        if (!readStoredValue(modelStorageKey(item), "")) {
-                          writeStoredValue(modelStorageKey(item), providerModels[item]);
-                        }
-                      }}
-                    >
-                      {providerLabels[item]}
-                    </button>
-                  ))}
+                <div className="mt-3">
+                  <CustomSelect
+                    label="供应商"
+                    options={providerOptions.map((item) => ({
+                      value: item,
+                      label: providerLabels[item],
+                      badge: item === "velotric" ? "公司" : undefined,
+                      description:
+                        item === "velotric"
+                          ? "走公司 GPT 号池网关"
+                          : item === "aliyun"
+                            ? "阿里云百炼兼容接口"
+                            : item === "openai"
+                              ? "OpenAI 官方 API"
+                              : "DeepSeek 官方 API",
+                    }))}
+                    value={provider}
+                    onChange={(value) => selectProvider(normalizeProvider(value))}
+                  />
                 </div>
                 <div className="relative mt-3">
                   <input
@@ -1064,13 +1404,43 @@ export default function Home() {
                     清除密钥
                   </button>
                 </div>
-                <input
-                  className="mt-3 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
-                  placeholder="模型名称"
-                  value={model}
-                  spellCheck={false}
-                  onChange={(event) => writeStoredValue(modelStorageKey(provider), event.target.value)}
-                />
+                {provider === "aliyun" ? (
+                  <AliyunModelConfig
+                    model={model}
+                    thinkingMode={thinkingMode}
+                    onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                    onThinkingModeChange={(value) => writeStoredValue(thinkingModeStorageKey(provider), value)}
+                  />
+                ) : provider === "deepseek" ? (
+                  <DeepSeekModelConfig
+                    model={model}
+                    onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                  />
+                ) : provider === "velotric" ? (
+                  <>
+                    <VelotricGatewayConfig
+                      baseURL={baseURL}
+                      model={model}
+                      onBaseURLChange={(value) => writeStoredValue(baseURLStorageKey(provider), value)}
+                      onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                    />
+                    <ReasoningEffortConfig
+                      reasoningEffort={reasoningEffort}
+                      onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <OpenAIModelConfig
+                      model={model}
+                      onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                    />
+                    <ReasoningEffortConfig
+                      reasoningEffort={reasoningEffort}
+                      onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
+                    />
+                  </>
+                )}
               </div>
             ) : (
               <ApiKeyConfigSkeleton />
@@ -1078,11 +1448,11 @@ export default function Home() {
 
             <button
               className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={isLoading || !isClientReady}
+              disabled={!isClientReady}
               onClick={generate}
             >
               {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              {isLoading ? "生成中" : "生成测试用例"}
+              {isLoading ? "正在 AI 生成，查看过程" : "生成测试用例"}
             </button>
 
             {error ? (
@@ -1095,13 +1465,7 @@ export default function Home() {
 
           <DemoExperienceCard active={isDemoResult} onLoad={loadDemoCase} />
 
-          <RunHistoryPanel
-            activeRunId={activeRunId}
-            history={runHistory}
-            onClear={deleteAllRunRecords}
-            onDelete={deleteRunRecord}
-            onLoad={loadRunRecord}
-          />
+          <RunHistoryEntryCard count={runHistory.length} />
 
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -1111,25 +1475,25 @@ export default function Home() {
             <div className="mt-4 grid gap-2">
               <button
                 className={clsx(
-                  "flex h-10 items-center justify-between rounded-lg px-3 text-sm transition",
+                  "flex h-10 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
                   activeModule === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
                 )}
                 onClick={() => setActiveModule("全部")}
               >
                 <span>全部</span>
-                <span>{result?.cases.length ?? 0}</span>
+                <span className="shrink-0">{result?.cases.length ?? 0}</span>
               </button>
               {moduleNames.map((moduleName) => (
                 <button
                   key={moduleName}
                   className={clsx(
-                    "flex min-h-10 items-center justify-between gap-3 rounded-lg px-3 py-2 text-left text-sm transition",
+                    "flex min-h-10 w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
                     activeModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
                   )}
                   onClick={() => setActiveModule(moduleName)}
                 >
-                  <span className="min-w-0 truncate">{moduleName}</span>
-                  <span>{moduleCounts[moduleName]}</span>
+                  <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{moduleName}</span>
+                  <span className="shrink-0">{moduleCounts[moduleName]}</span>
                 </button>
               ))}
             </div>
@@ -1156,8 +1520,8 @@ export default function Home() {
                 return (
                   <button
                     key={category}
-                    className={clsx(
-                      "flex h-10 items-center justify-between rounded-lg px-3 text-sm transition",
+                  className={clsx(
+                      "flex h-10 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
                       activeCategory === category ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
                     )}
                     onClick={() => setActiveCategory(category)}
@@ -1177,9 +1541,9 @@ export default function Home() {
         <section className="min-w-0 space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
-              <div>
+              <div className="min-w-0">
                 <h2 className="text-2xl font-semibold tracking-normal">测试用例</h2>
-                <p className="mt-1 text-sm text-slate-500">{result?.summary ?? "等待 PRD 解析"}</p>
+                <p className="mt-1 break-words text-sm text-slate-500">{result?.summary ?? "等待 PRD 解析"}</p>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <label className="relative block">
@@ -1209,6 +1573,8 @@ export default function Home() {
             ) : null}
           </div>
 
+          <RunStatsPanel result={result} />
+
           <CoverageBlueprintPanel activeModule={activeModule} result={result} />
 
           {groupedCases.length > 0 ? (
@@ -1217,7 +1583,7 @@ export default function Home() {
                 <section key={`${group.moduleName}-${groupIndex}`} className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
                     <div>
-                      <h3 className="text-lg font-semibold">{group.moduleName}</h3>
+                        <h3 className="break-words text-lg font-semibold">{group.moduleName}</h3>
                       <p className="mt-1 text-sm text-slate-500">{group.cases.length} 条测试用例</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1296,9 +1662,9 @@ function CaseCard({ item }: { item: TestCase }) {
             <span className="text-xs text-slate-400">{template.id}</span>
           </div>
           <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{template.module}</p>
+          <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
           {item.testPoint || item.evidence ? (
-            <p className="mt-2 text-sm leading-6 text-slate-500">
+            <p className="mt-2 break-words text-sm leading-6 text-slate-500">
               {item.testPoint ? `测试点：${item.testPoint}` : ""}
               {item.testPoint && item.evidence ? " ｜ " : ""}
               {item.evidence ? `依据：${item.evidence}` : ""}
@@ -1311,7 +1677,7 @@ function CaseCard({ item }: { item: TestCase }) {
         {templateMeta.map(([label, value]) => (
           <div key={label} className="min-w-0">
             <span className="text-xs font-medium text-slate-400">{label}</span>
-            <p className="mt-1 truncate text-slate-700">{value}</p>
+            <p className="mt-1 break-words text-slate-700">{value}</p>
           </div>
         ))}
       </div>
@@ -1319,7 +1685,7 @@ function CaseCard({ item }: { item: TestCase }) {
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
-          <p className="mt-2 text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
+          <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
         </div>
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
@@ -1327,7 +1693,7 @@ function CaseCard({ item }: { item: TestCase }) {
             {item.steps.map((step, index) => (
               <li key={`${item.id}-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
                 <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
-                <span>{step}</span>
+                <span className="min-w-0 break-words">{step}</span>
               </li>
             ))}
           </ol>
@@ -1336,7 +1702,7 @@ function CaseCard({ item }: { item: TestCase }) {
           <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
           <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
             {template.expectedResults.split("\n").map((line, index) => (
-              <p key={`${item.id}-expected-${index}`}>{line}</p>
+              <p key={`${item.id}-expected-${index}`} className="break-words">{line}</p>
             ))}
           </div>
         </div>

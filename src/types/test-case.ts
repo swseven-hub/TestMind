@@ -10,6 +10,43 @@ export type Complexity = "minimal" | "simple" | "medium" | "complex" | "large";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
 
+export type ThinkingMode = "fast" | "quality";
+
+export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
+
+export type RunStatus = "success" | "failed" | "cancelled";
+
+export type GenerationUsage = {
+  promptTokens: number;
+  completionTokens: number;
+  totalTokens: number;
+  reasoningTokens?: number;
+};
+
+export type GenerationModuleStats = {
+  name: string;
+  caseCount: number;
+  durationMs: number;
+  usage?: GenerationUsage;
+};
+
+export type GenerationStats = {
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  provider: "deepseek" | "aliyun" | "openai" | "velotric";
+  model: string;
+  thinkingMode?: ThinkingMode;
+  reasoningEffort?: ReasoningEffort;
+  usage?: GenerationUsage;
+  estimatedCostCny?: number | null;
+  sourceTextLength?: number;
+  plannedCaseCount?: number;
+  moduleCount: number;
+  caseCount: number;
+  modules: GenerationModuleStats[];
+};
+
 export type CategoryTargetMap = Partial<Record<TestCategory, number>>;
 
 export type CoverageTestPoint = {
@@ -80,4 +117,5 @@ export type GenerateResponse = {
   cases: TestCase[];
   warnings: string[];
   coverageBlueprint?: CoverageBlueprint;
+  stats?: GenerationStats;
 };

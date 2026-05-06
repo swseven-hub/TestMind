@@ -3,7 +3,8 @@ import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { NextResponse } from "next/server";
 import { generateFallbackCases } from "@/lib/test-case-generator";
-import type { GenerateResponse, TestCase } from "@/types/test-case";
+import { normalizeReasoningEffort, providerBaseURLs, providerLabels, providerModels } from "@/lib/model-config";
+import type { GenerateResponse, ReasoningEffort, TestCase } from "@/types/test-case";
 
 export const runtime = "nodejs";
 export const maxDuration = 60;
@@ -41,27 +42,32 @@ const schema = {
   },
 };
 
-type LlmProvider = "openai" | "deepseek" | "aliyun";
+type LlmProvider = "openai" | "deepseek" | "aliyun" | "velotric";
 
 const providerDefaults: Record<LlmProvider, { model: string; baseURL?: string; envKey: string }> = {
   openai: {
-    model: process.env.OPENAI_MODEL || "gpt-4.1-mini",
+    model: process.env.OPENAI_MODEL || providerModels.openai,
     envKey: process.env.OPENAI_API_KEY || "",
   },
   deepseek: {
-    model: process.env.DEEPSEEK_MODEL || "deepseek-v4-flash",
+    model: process.env.DEEPSEEK_MODEL || providerModels.deepseek,
     baseURL: "https://api.deepseek.com",
     envKey: process.env.DEEPSEEK_API_KEY || "",
   },
   aliyun: {
-    model: process.env.DASHSCOPE_MODEL || "qwen-plus",
+    model: process.env.DASHSCOPE_MODEL || providerModels.aliyun,
     baseURL: process.env.DASHSCOPE_BASE_URL || "https://dashscope.aliyuncs.com/compatible-mode/v1",
     envKey: process.env.DASHSCOPE_API_KEY || "",
+  },
+  velotric: {
+    model: process.env.VELOTRIC_MODEL || providerModels.velotric,
+    baseURL: process.env.VELOTRIC_BASE_URL || providerBaseURLs.velotric,
+    envKey: process.env.VELOTRIC_API_KEY || "",
   },
 };
 
 function getProvider(value: FormDataEntryValue | null): LlmProvider {
-  if (value === "openai" || value === "aliyun") return value;
+  if (value === "openai" || value === "aliyun" || value === "velotric") return value;
   return "deepseek";
 }
 
@@ -132,12 +138,13 @@ function parseJsonPayload(content: string) {
   }
 }
 
-async function generateWithOpenAI(text: string, fileName: string, apiKey: string, model: string): Promise<GenerateResponse> {
+async function generateWithOpenAI(text: string, fileName: string, apiKey: string, model: string, reasoningEffort: ReasoningEffort): Promise<GenerateResponse> {
   const client = new OpenAI({ apiKey });
   const { systemPrompt, userPrompt, truncatedText } = getPrompt(text, fileName);
 
   const response = await client.responses.create({
     model,
+    reasoning: { effort: reasoningEffort },
     max_output_tokens: 12_000,
     input: [
       {
@@ -176,10 +183,12 @@ async function generateWithCompatibleChat(
   apiKey: string,
   model: string,
   provider: Exclude<LlmProvider, "openai">,
+  reasoningEffort: ReasoningEffort,
+  baseURL?: string,
 ): Promise<GenerateResponse> {
   const client = new OpenAI({
     apiKey,
-    baseURL: providerDefaults[provider].baseURL,
+    baseURL: baseURL || providerDefaults[provider].baseURL,
   });
   const { systemPrompt, userPrompt, truncatedText } = getPrompt(text, fileName);
   const useJsonMode = true;
@@ -197,6 +206,7 @@ async function generateWithCompatibleChat(
       },
     ],
     ...(useJsonMode ? { response_format: { type: "json_object" as const } } : {}),
+    ...(provider === "velotric" ? { reasoning_effort: reasoningEffort } : {}),
     max_tokens: 12_000,
     stream: false,
   });
@@ -221,6 +231,8 @@ async function generateWithProvider(
   provider: LlmProvider,
   requestApiKey?: string,
   requestModel?: string,
+  requestBaseURL?: string,
+  requestReasoningEffort: ReasoningEffort = "medium",
 ): Promise<GenerateResponse | undefined> {
   const config = providerDefaults[provider];
   const apiKey = requestApiKey?.trim() || config.envKey;
@@ -228,10 +240,10 @@ async function generateWithProvider(
 
   const model = requestModel?.trim() || config.model;
   if (provider === "openai") {
-    return generateWithOpenAI(text, fileName, apiKey, model);
+    return generateWithOpenAI(text, fileName, apiKey, model, requestReasoningEffort);
   }
 
-  return generateWithCompatibleChat(text, fileName, apiKey, model, provider);
+  return generateWithCompatibleChat(text, fileName, apiKey, model, provider, requestReasoningEffort, provider === "velotric" ? requestBaseURL : undefined);
 }
 
 export async function POST(request: Request) {
@@ -240,9 +252,13 @@ export async function POST(request: Request) {
     const file = formData.get("file");
     const apiKey = formData.get("apiKey");
     const model = formData.get("model");
+    const baseURL = formData.get("baseURL");
+    const reasoningEffort = formData.get("reasoningEffort");
     const provider = getProvider(formData.get("provider"));
     const requestApiKey = typeof apiKey === "string" ? apiKey.trim() : "";
     const requestModel = typeof model === "string" ? model.trim() : "";
+    const requestBaseURL = typeof baseURL === "string" ? baseURL.trim() : "";
+    const requestReasoningEffort = normalizeReasoningEffort(typeof reasoningEffort === "string" ? reasoningEffort : "medium");
 
     if (!(file instanceof File)) {
       return NextResponse.json({ message: "请上传 PDF 格式的 PRD 文档。" }, { status: 400 });
@@ -263,11 +279,11 @@ export async function POST(request: Request) {
 
     let aiResult: GenerateResponse | undefined;
     try {
-      aiResult = await generateWithProvider(text, file.name, provider, requestApiKey, requestModel);
+      aiResult = await generateWithProvider(text, file.name, provider, requestApiKey, requestModel, requestBaseURL, requestReasoningEffort);
     } catch (error) {
       console.error(error);
       if (requestApiKey) {
-        const providerName = provider === "deepseek" ? "DeepSeek" : provider === "aliyun" ? "阿里云百炼" : "OpenAI";
+        const providerName = providerLabels[provider];
         return NextResponse.json({ message: `${providerName} 调用失败，请检查网页填写的 API Key、额度、模型名称或模型权限。` }, { status: 401 });
       }
       throw error;
