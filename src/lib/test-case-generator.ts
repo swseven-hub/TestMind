@@ -1,22 +1,40 @@
 import type { GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
 
-const moduleCasePlan: TestCategory[] = ["功能", "功能", "功能", "边界", "边界", "异常", "异常", "权限", "性能"];
+const categorySignals: Record<Exclude<TestCategory, "功能">, string[]> = {
+  边界: ["边界", "范围", "最大", "最小", "上限", "下限", "长度", "格式", "金额", "数量", "分页", "排序", "字段", "参数", "有效期", "必填"],
+  异常: ["异常", "失败", "错误", "超时", "网络", "接口", "服务", "依赖", "中断", "回滚", "重试", "库存", "过期"],
+  权限: ["权限", "角色", "登录", "未登录", "授权", "会员", "管理员", "访问", "越权", "账号", "隐私", "会话"],
+  性能: ["性能", "并发", "高频", "大量", "响应", "P95", "加载", "分页", "压力", "耗时", "批量"],
+};
 
 function cleanText(value: string) {
   return value.replace(/\s+/g, " ").trim();
+}
+
+function isUsefulCandidate(value: string) {
+  if (value.startsWith("#")) return false;
+  if (/^\|?\s*-{2,}/.test(value)) return false;
+  if (/^\|.*\|$/.test(value)) return false;
+  if (/^(项目|内容|术语|说明|字段|规则|角色|权限)$/.test(value)) return false;
+  return true;
 }
 
 function sentenceCandidates(text: string) {
   return text
     .split(/(?<=[。！？.!?；;])\s+|[\n\r]+|(?:\d+\.|[一二三四五六七八九十]+、)/)
     .map(cleanText)
-    .filter((item) => item.length >= 12 && !/^--\s*\d+\s+of\s+\d+\s*--$/i.test(item))
+    .filter((item) => item.length >= 12 && isUsefulCandidate(item) && !/^--\s*\d+\s+of\s+\d+\s*--$/i.test(item))
     .slice(0, 80);
 }
 
 function inferModule(line: string, index: number) {
   const candidates = line.match(/(?:模块|页面|功能|流程|入口|菜单|服务|接口|表单|报表|配置|规则|角色|对象|任务)[:：]?\s*([\u4e00-\u9fa5A-Za-z0-9_-]{2,18})/);
   if (candidates?.[1]) return candidates[1];
+  if (/登录|注册|验证码|密码|账号/.test(line)) return "登录与注册";
+  if (/任务列表|筛选|排序|空状态|分页/.test(line)) return "任务列表";
+  if (/领取任务|任务进度|完成任务|任务状态|过期/.test(line)) return "任务领取与进度";
+  if (/奖励|积分|优惠券|发放|库存|券包/.test(line)) return "奖励领取";
+  if (/会员等级|风控|高价值|等级门槛/.test(line)) return "会员等级与风控";
   const shortText = line.replace(/[，,。；;：:]/g, " ").split(/\s+/).find((part) => part.length >= 2 && part.length <= 12);
   return shortText ?? `需求点 ${index + 1}`;
 }
@@ -62,6 +80,21 @@ function expectedFor(category: TestCategory) {
   return expectations[category];
 }
 
+function casePlanForModule(lines: string[]) {
+  const text = lines.join(" ");
+  const plan: TestCategory[] = ["功能", "功能"];
+  if (lines.length >= 2) plan.push("功能");
+
+  for (const category of ["边界", "异常", "权限", "性能"] as const) {
+    if (categorySignals[category].some((word) => text.includes(word))) plan.push(category);
+  }
+
+  if (lines.length >= 4) plan.push("功能");
+  if (lines.length >= 6 && !plan.includes("异常")) plan.push("异常");
+
+  return plan.slice(0, lines.length <= 1 ? 4 : lines.length <= 3 ? 6 : 9);
+}
+
 export function generateFallbackCases(text: string, fileName: string): GenerateResponse {
   const candidates = sentenceCandidates(text);
   const seed = candidates.length > 0 ? candidates : ["PRD 未提取到足够文本，请补充更清晰的需求描述。"];
@@ -77,6 +110,7 @@ export function generateFallbackCases(text: string, fileName: string): GenerateR
   let caseIndex = 1;
 
   for (const [moduleName, lines] of modules) {
+    const moduleCasePlan = casePlanForModule(lines);
     for (let i = 0; i < moduleCasePlan.length; i += 1) {
       const category = moduleCasePlan[i];
       const line = lines[(i * 2) % lines.length];
