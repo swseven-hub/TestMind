@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   AlertCircle,
   Bot,
@@ -51,6 +51,29 @@ const providerLabels = {
   aliyun: "阿里云百炼",
   openai: "OpenAI",
 };
+
+type Provider = keyof typeof providerModels;
+
+const storageKeys = {
+  apiKey: "testmind.apiKey",
+  model: "testmind.model",
+  provider: "testmind.provider",
+};
+
+function readStoredValue(key: string, fallback: string) {
+  if (typeof window === "undefined") return fallback;
+
+  try {
+    return window.localStorage.getItem(key) || fallback;
+  } catch {
+    return fallback;
+  }
+}
+
+function readStoredProvider(): Provider {
+  const value = readStoredValue(storageKeys.provider, "deepseek");
+  return value === "aliyun" || value === "openai" || value === "deepseek" ? value : "deepseek";
+}
 
 type ProgressStatus = "idle" | "running" | "success" | "error";
 
@@ -210,9 +233,9 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [apiKey, setApiKey] = useState("");
-  const [provider, setProvider] = useState<keyof typeof providerModels>("deepseek");
-  const [model, setModel] = useState(providerModels.deepseek);
+  const [apiKey, setApiKey] = useState(() => readStoredValue(storageKeys.apiKey, ""));
+  const [provider, setProvider] = useState<Provider>(() => readStoredProvider());
+  const [model, setModel] = useState(() => readStoredValue(storageKeys.model, providerModels[readStoredProvider()]));
   const [showApiKey, setShowApiKey] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>("idle");
@@ -264,6 +287,36 @@ export default function Home() {
       .map(([moduleName, cases]) => ({ moduleName, cases }));
   }, [moduleNames, visibleCases]);
 
+  useEffect(() => {
+    try {
+      window.localStorage.setItem(storageKeys.provider, provider);
+    } catch {
+      // Ignore storage errors such as private browsing quota restrictions.
+    }
+  }, [provider]);
+
+  useEffect(() => {
+    try {
+      const normalized = model.trim();
+      if (normalized) window.localStorage.setItem(storageKeys.model, normalized);
+    } catch {
+      // Ignore storage errors such as private browsing quota restrictions.
+    }
+  }, [model]);
+
+  useEffect(() => {
+    try {
+      const normalized = apiKey.trim();
+      if (normalized) {
+        window.localStorage.setItem(storageKeys.apiKey, normalized);
+      } else {
+        window.localStorage.removeItem(storageKeys.apiKey);
+      }
+    } catch {
+      // Ignore storage errors such as private browsing quota restrictions.
+    }
+  }, [apiKey]);
+
   function pickFile(nextFile?: File) {
     if (!nextFile) return;
     setError("");
@@ -271,6 +324,15 @@ export default function Home() {
     setActiveModule("全部");
     setActiveCategory("全部");
     setFile(nextFile);
+  }
+
+  function clearSavedApiKey() {
+    setApiKey("");
+    try {
+      window.localStorage.removeItem(storageKeys.apiKey);
+    } catch {
+      // Ignore storage errors such as private browsing quota restrictions.
+    }
   }
 
   async function generate() {
@@ -497,6 +559,17 @@ export default function Home() {
                   onClick={() => setShowApiKey((current) => !current)}
                 >
                   {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                </button>
+              </div>
+              <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+                <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
+                <button
+                  className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
+                  disabled={!apiKey.trim()}
+                  type="button"
+                  onClick={clearSavedApiKey}
+                >
+                  清除密钥
                 </button>
               </div>
               <input
