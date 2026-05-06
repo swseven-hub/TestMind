@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "clsx": "latest",
+    "exceljs": "^4.4.0",
     "jsonrepair": "^3.14.0",
     "lucide-react": "latest",
     "next": "latest",

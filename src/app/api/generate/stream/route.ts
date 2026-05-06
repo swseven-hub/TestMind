@@ -2,6 +2,15 @@ import OpenAI from "openai";
 import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { generateFallbackCases } from "@/lib/test-case-generator";
+import {
+  caseTypeOptions,
+  defaultExecutionType,
+  defaultMaintainer,
+  normalizeCaseType,
+  normalizeExecutionType,
+  normalizeNullableNumber,
+  normalizeTemplateText,
+} from "@/lib/testcase-template";
 import type {
   CategoryTargetMap,
   Complexity,
@@ -588,18 +597,30 @@ function normalizeCases(cases: TestCase[], module: ModulePlan) {
     .map((item) => {
       const category = categories.includes(item.category) ? item.category : "功能";
       const priority = priorities.includes(item.priority) ? item.priority : category === "功能" ? "P1" : "P2";
+      const expectedResults = normalizeStringList(item.expectedResults, 20);
+      const maintainer = normalizeTemplateText(item.maintainer, defaultMaintainer);
       return {
         id: item.id || "",
         category,
         title: item.title?.trim() || `${formatModuleName(module)}测试用例`,
         priority,
         module: formatModuleName(module),
+        status: normalizeTemplateText(item.status),
+        maintainer,
+        caseType: normalizeCaseType(item.caseType, category),
+        executionType: normalizeExecutionType(item.executionType),
+        estimatedHours: normalizeNullableNumber(item.estimatedHours),
+        remainingHours: normalizeNullableNumber(item.remainingHours),
+        relatedWorkItems: normalizeTemplateText(item.relatedWorkItems),
         testPointId: item.testPointId?.trim(),
         testPoint: item.testPoint?.trim(),
         evidence: item.evidence?.trim(),
         preconditions: item.preconditions?.trim() || `${formatModuleName(module)}模块可访问，测试数据和依赖服务可用。`,
         steps: (item.steps ?? []).map((step) => step.trim()).filter(Boolean),
+        expectedResults: expectedResults.length ? expectedResults : undefined,
         expectedResult: item.expectedResult?.trim() || "结果符合 PRD 预期。",
+        followers: normalizeTemplateText(item.followers, maintainer),
+        remarks: normalizeTemplateText(item.remarks),
       };
     })
     .filter((item) => item.title && item.steps.length >= 1);
@@ -836,6 +857,21 @@ ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${poi
 - 不适用类型：${module.skippedCategories?.join("；") || "无"}。
 - 覆盖说明：${module.coverageNotes?.join("；") || "按 PRD 测试点和风险点生成。"}
 
+Excel 导入模板字段要求：
+- module 对应模板“模块”，必须填写完整模块路径：${moduleName}
+- id 对应模板“编号”，先填临时编号即可，系统会最终重排为 TC-001。
+- title 对应模板“标题”，必填。
+- maintainer 对应模板“维护人”，默认填写 ${defaultMaintainer}。
+- caseType 对应模板“用例类型”，只能从这些值中选择：${caseTypeOptions.join("、")}。性能类优先“性能测试”，权限/安全/越权/敏感数据优先“安全相关”，其余通常为“功能测试”。
+- priority 对应模板“重要程度”，只能是 P0/P1/P2。
+- executionType 对应模板“测试类型”，固定为 ${defaultExecutionType}。
+- estimatedHours 和 remainingHours 对应模板“预估工时/剩余工时”，只能填数字或 null；没有明确估算时填 null。
+- relatedWorkItems 对应模板“关联工作项”，仅当 PRD 出现需求编号/工作项编号时填写，多个用 | 分隔，否则留空字符串。
+- steps 对应模板“步骤描述”，每个步骤必须可执行。
+- expectedResults 对应模板“预期结果”，数组顺序必须与 steps 对齐；同时 expectedResult 保留一句总预期。
+- followers 对应模板“关注人”，默认填写 ${defaultMaintainer}。
+- remarks 对应模板“备注”，用于写测试分类、测试点、PRD 依据或风险说明。
+
 请只为当前模块生成测试用例，禁止生成其他模块。
 
 数量和覆盖规则：
@@ -853,6 +889,7 @@ ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${poi
 12. steps 写成可执行动作，expectedResult 写可验证结果。
 13. module 字段统一填写：${moduleName}
 14. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
+15. 每条用例必须满足 Excel 模板字段，尤其是 caseType、priority、executionType、maintainer、followers、steps、expectedResults。
 
 逆向功能用例示例方向：
 - 身份/访问类：未登录、无权限、角色不匹配、账号状态异常、授权取消、会话过期、多端冲突。
@@ -872,12 +909,22 @@ ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${poi
       "title": "具体测试点",
       "priority": "P0",
       "module": "${moduleName}",
+      "status": "",
+      "maintainer": "${defaultMaintainer}",
+      "caseType": "功能测试",
+      "executionType": "${defaultExecutionType}",
+      "estimatedHours": null,
+      "remainingHours": null,
+      "relatedWorkItems": "",
       "testPointId": "TP-01",
       "testPoint": "对应原子测试点名称",
       "evidence": "PRD 依据",
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
-      "expectedResult": "预期结果"
+      "expectedResults": ["步骤1对应预期", "步骤2对应预期"],
+      "expectedResult": "总预期结果",
+      "followers": "${defaultMaintainer}",
+      "remarks": "测试分类/测试点/PRD依据"
     }
   ]
 }
@@ -978,6 +1025,7 @@ ${coverageGaps.pointGaps
 5. 每条 steps 必须可执行，expectedResult 必须可验证。
 6. 严格依据 PRD 文本和覆盖蓝图，不要引入无依据的行业假设，不要为了凑数量扩展不存在的功能。
 7. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
+8. 每条用例必须满足 Excel 模板字段：maintainer 默认 ${defaultMaintainer}，caseType 只能是 ${caseTypeOptions.join("、")}，priority 只能是 P0/P1/P2，executionType 固定为 ${defaultExecutionType}，estimatedHours/remainingHours 只能是数字或 null，steps 与 expectedResults 数组顺序对齐。
 
 只输出 JSON：
 {
@@ -988,12 +1036,22 @@ ${coverageGaps.pointGaps
       "title": "具体补充测试点",
       "priority": "P1",
       "module": "${moduleName}",
+      "status": "",
+      "maintainer": "${defaultMaintainer}",
+      "caseType": "功能测试",
+      "executionType": "${defaultExecutionType}",
+      "estimatedHours": null,
+      "remainingHours": null,
+      "relatedWorkItems": "",
       "testPointId": "TP-01",
       "testPoint": "对应原子测试点名称",
       "evidence": "PRD 依据",
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
-      "expectedResult": "预期结果"
+      "expectedResults": ["步骤1对应预期", "步骤2对应预期"],
+      "expectedResult": "总预期结果",
+      "followers": "${defaultMaintainer}",
+      "remarks": "测试分类/测试点/PRD依据"
     }
   ]
 }

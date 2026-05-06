@@ -24,6 +24,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
+import { getTemplateCaseFields, getTemplateCaseRow, testcaseTemplateHeaders } from "@/lib/testcase-template";
 import type { Complexity, CoverageModule, GenerateResponse, RiskLevel, TestCase, TestCategory } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
@@ -180,19 +181,8 @@ function downloadJson(data: GenerateResponse) {
 
 function downloadCsv(data: GenerateResponse) {
   const rows = [
-    ["ID", "分类", "优先级", "模块", "测试点", "PRD依据", "标题", "前置条件", "步骤", "预期结果"],
-    ...data.cases.map((item) => [
-      item.id,
-      item.category,
-      item.priority,
-      item.module,
-      item.testPoint ?? "",
-      item.evidence ?? "",
-      item.title,
-      item.preconditions,
-      item.steps.map((step, index) => `${index + 1}. ${step}`).join("\n"),
-      item.expectedResult,
-    ]),
+    [...testcaseTemplateHeaders],
+    ...data.cases.map((item) => getTemplateCaseRow(item)),
   ];
   const csv = rows
     .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
@@ -202,6 +192,27 @@ function downloadCsv(data: GenerateResponse) {
   const anchor = document.createElement("a");
   anchor.href = url;
   anchor.download = `${data.fileName.replace(/\.pdf$/i, "")}-test-cases.csv`;
+  anchor.click();
+  URL.revokeObjectURL(url);
+}
+
+async function downloadExcel(data: GenerateResponse) {
+  const response = await fetch("/api/export/excel", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(data),
+  });
+
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(payload?.message || "Excel 导出失败，请稍后重试。");
+  }
+
+  const blob = await response.blob();
+  const url = URL.createObjectURL(blob);
+  const anchor = document.createElement("a");
+  anchor.href = url;
+  anchor.download = `${data.fileName.replace(/\.pdf$/i, "")}-test-cases.xlsx`;
   anchor.click();
   URL.revokeObjectURL(url);
 }
@@ -492,6 +503,7 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [error, setError] = useState("");
   const isClientReady = useClientReady();
   const provider = useStoredProvider();
@@ -510,11 +522,28 @@ export default function Home() {
   const visibleCases = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return (result?.cases ?? []).filter((item) => {
+      const template = getTemplateCaseFields(item);
       const moduleMatched = activeModule === "全部" || item.module === activeModule;
       const categoryMatched = activeCategory === "全部" || item.category === activeCategory;
       const textMatched =
         !normalized ||
-        [item.id, item.title, item.module, item.priority, item.testPoint, item.evidence, item.preconditions, item.expectedResult, ...item.steps]
+        [
+          item.id,
+          item.title,
+          item.module,
+          item.priority,
+          item.testPoint,
+          item.evidence,
+          item.preconditions,
+          item.expectedResult,
+          template.caseType,
+          template.executionType,
+          template.maintainer,
+          template.followers,
+          template.relatedWorkItems,
+          template.remarks,
+          ...item.steps,
+        ]
           .join(" ")
           .toLowerCase()
           .includes(normalized);
@@ -576,6 +605,20 @@ export default function Home() {
     setStreamPreview("");
     setReceivedChars(0);
     setProgressLogs([]);
+  }
+
+  async function exportExcel() {
+    if (!result || isExportingExcel) return;
+
+    setIsExportingExcel(true);
+    setError("");
+    try {
+      await downloadExcel(result);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Excel 导出失败，请稍后重试。");
+    } finally {
+      setIsExportingExcel(false);
+    }
   }
 
   async function generate() {
@@ -944,11 +987,11 @@ export default function Home() {
                 </label>
                 <button
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                  disabled={!result}
-                  onClick={() => result && downloadJson(result)}
+                  disabled={!result || isExportingExcel}
+                  onClick={exportExcel}
                 >
-                  <Download className="size-4" />
-                  JSON
+                  {isExportingExcel ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                  Excel
                 </button>
                 <button
                   className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
@@ -957,6 +1000,14 @@ export default function Home() {
                 >
                   <Download className="size-4" />
                   CSV
+                </button>
+                <button
+                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                  disabled={!result}
+                  onClick={() => result && downloadJson(result)}
+                >
+                  <Download className="size-4" />
+                  JSON
                 </button>
               </div>
             </div>
@@ -1026,6 +1077,20 @@ export default function Home() {
 
 function CaseCard({ item }: { item: TestCase }) {
   const Icon = categoryIcons[item.category];
+  const template = getTemplateCaseFields(item);
+  const templateMeta = [
+    ["模块", template.module],
+    ["编号", template.id || "自动新建"],
+    ["状态", template.status || "未设置"],
+    ["维护人", template.maintainer],
+    ["用例类型", template.caseType],
+    ["重要程度", template.priority],
+    ["测试类型", template.executionType],
+    ["预估工时", template.estimatedHours === null ? "未估算" : String(template.estimatedHours)],
+    ["剩余工时", template.remainingHours === null ? "未估算" : String(template.remainingHours)],
+    ["关联工作项", template.relatedWorkItems || "无"],
+    ["关注人", template.followers],
+  ];
 
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1036,11 +1101,12 @@ function CaseCard({ item }: { item: TestCase }) {
               <Icon className="size-3.5" />
               {item.category}
             </span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">{item.priority}</span>
-            <span className="text-xs text-slate-400">{item.id}</span>
+            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">重要程度 {template.priority}</span>
+            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
+            <span className="text-xs text-slate-400">{template.id}</span>
           </div>
           <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
-          <p className="mt-1 text-sm text-slate-500">{item.module}</p>
+          <p className="mt-1 text-sm text-slate-500">{template.module}</p>
           {item.testPoint || item.evidence ? (
             <p className="mt-2 text-sm leading-6 text-slate-500">
               {item.testPoint ? `测试点：${item.testPoint}` : ""}
@@ -1051,13 +1117,22 @@ function CaseCard({ item }: { item: TestCase }) {
         </div>
       </div>
 
+      <div className="mt-4 grid gap-2 rounded-lg bg-slate-50 p-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
+        {templateMeta.map(([label, value]) => (
+          <div key={label} className="min-w-0">
+            <span className="text-xs font-medium text-slate-400">{label}</span>
+            <p className="mt-1 truncate text-slate-700">{value}</p>
+          </div>
+        ))}
+      </div>
+
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
-          <p className="mt-2 text-sm leading-6 text-slate-700">{item.preconditions}</p>
+          <p className="mt-2 text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
         </div>
         <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">步骤</p>
+          <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
           <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
             {item.steps.map((step, index) => (
               <li key={`${item.id}-${step}`} className="grid grid-cols-[24px_1fr] gap-2">
@@ -1069,9 +1144,19 @@ function CaseCard({ item }: { item: TestCase }) {
         </div>
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
-          <p className="mt-2 text-sm leading-6 text-slate-700">{item.expectedResult}</p>
+          <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+            {template.expectedResults.split("\n").map((line) => (
+              <p key={`${item.id}-${line}`}>{line}</p>
+            ))}
+          </div>
         </div>
       </div>
+      {template.remarks ? (
+        <div className="mt-4 rounded-lg bg-slate-50 p-3">
+          <p className="text-xs font-medium uppercase text-slate-400">备注</p>
+          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{template.remarks}</p>
+        </div>
+      ) : null}
     </article>
   );
 }

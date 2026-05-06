@@ -2,6 +2,10 @@ export type TestCategory = "功能" | "边界" | "异常" | "权限" | "性能";
 
 export type TestPriority = "P0" | "P1" | "P2";
 
+export type TestCaseImportType = "功能测试" | "性能测试" | "配置相关" | "安装部署" | "接口测试" | "安全相关" | "兼容性测试" | "UI测试" | "其他";
+
+export type TestExecutionType = "手动";
+
 export type Complexity = "minimal" | "simple" | "medium" | "complex" | "large";
 
 export type RiskLevel = "low" | "medium" | "high" | "critical";
@@ -51,12 +55,22 @@ export type TestCase = {
   title: string;
   priority: TestPriority;
   module: string;
+  status?: string;
+  maintainer?: string;
+  caseType?: TestCaseImportType;
+  executionType?: TestExecutionType;
+  estimatedHours?: number | null;
+  remainingHours?: number | null;
+  relatedWorkItems?: string;
   testPointId?: string;
   testPoint?: string;
   evidence?: string;
   preconditions: string;
   steps: string[];
+  expectedResults?: string[];
   expectedResult: string;
+  followers?: string;
+  remarks?: string;
 };
 
 export type GenerateResponse = {
