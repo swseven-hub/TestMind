@@ -14,7 +14,7 @@ export type TestCase = {
 };
 
 export type GenerateResponse = {
-  source: "ai" | "fallback";
+  source: "ai" | "fallback" | "demo";
   fileName: string;
   summary: string;
   cases: TestCase[];

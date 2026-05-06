@@ -3,6 +3,7 @@
 import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   AlertCircle,
+  BookOpen,
   Bot,
   CheckCircle2,
   Download,
@@ -10,7 +11,9 @@ import {
   EyeOff,
   FileText,
   KeyRound,
+  ListChecks,
   Loader2,
+  PlayCircle,
   Search,
   Shield,
   Sparkles,
@@ -20,6 +23,7 @@ import {
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
+import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
 import type { GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
@@ -306,6 +310,57 @@ function ApiKeyConfigSkeleton() {
   );
 }
 
+function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () => void }) {
+  const moduleCount = new Set(demoGenerateResponse.cases.map((item) => item.module)).size;
+
+  return (
+    <div className="rounded-lg border border-teal-200 bg-white p-5 shadow-sm">
+      <div className="flex items-start justify-between gap-3">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <BookOpen className="size-4" />
+            快速体验
+          </div>
+          <h2 className="mt-2 text-lg font-semibold tracking-normal">内嵌示例 PRD</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">不用上传 PDF，也不用填写 API Key，先看一份完整示例的生成效果。</p>
+        </div>
+        <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+          {demoGenerateResponse.cases.length} 条
+        </span>
+      </div>
+
+      <div className="mt-4 grid grid-cols-2 border-y border-slate-200 py-3 text-sm">
+        <div>
+          <p className="text-xs text-slate-400">模块</p>
+          <p className="mt-1 font-semibold text-slate-800">{moduleCount} 个</p>
+        </div>
+        <div className="border-l border-slate-200 pl-4">
+          <p className="text-xs text-slate-400">覆盖类型</p>
+          <p className="mt-1 font-semibold text-slate-800">5 类</p>
+        </div>
+      </div>
+
+      <div className="mt-4 space-y-2">
+        {demoPrdHighlights.slice(0, 3).map((item) => (
+          <div key={item} className="grid grid-cols-[20px_1fr] gap-2 text-sm leading-6 text-slate-600">
+            <ListChecks className="mt-1 size-4 text-teal-600" />
+            <span>{item}</span>
+          </div>
+        ))}
+      </div>
+
+      <button
+        className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800"
+        type="button"
+        onClick={onLoad}
+      >
+        <PlayCircle className="size-4" />
+        {active ? "重新加载演示案例" : "一键体验演示案例"}
+      </button>
+    </div>
+  );
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -327,6 +382,8 @@ export default function Home() {
   const [streamPreview, setStreamPreview] = useState("");
   const [receivedChars, setReceivedChars] = useState(0);
   const [progressError, setProgressError] = useState("");
+  const isDemoResult = result?.source === "demo";
+  const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "本地可运行";
 
   const visibleCases = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -382,6 +439,21 @@ export default function Home() {
 
   function clearSavedApiKey() {
     writeStoredValue(apiKeyStorageKey(provider), "");
+  }
+
+  function loadDemoCase() {
+    setError("");
+    setFile(null);
+    setResult(demoGenerateResponse);
+    setActiveModule("全部");
+    setActiveCategory("全部");
+    setQuery("");
+    setProgressOpen(false);
+    setProgressStatus("idle");
+    setProgressError("");
+    setStreamPreview("");
+    setReceivedChars(0);
+    setProgressLogs([]);
   }
 
   async function generate() {
@@ -525,7 +597,7 @@ export default function Home() {
           </div>
           <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 sm:flex">
             <Sparkles className="size-4 text-teal-600" />
-            {result?.source === "ai" ? "AI 生成" : "本地可运行"}
+            {sourceLabel}
           </div>
         </div>
       </section>
@@ -657,6 +729,8 @@ export default function Home() {
               </div>
             ) : null}
           </div>
+
+          <DemoExperienceCard active={isDemoResult} onLoad={loadDemoCase} />
 
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
@@ -803,11 +877,20 @@ export default function Home() {
             </div>
           ) : (
             <div className="grid min-h-96 place-items-center rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
-              <div>
+              <div className="max-w-md">
                 <div className="mx-auto grid size-14 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200">
                   <FileText className="size-7" />
                 </div>
                 <p className="mt-4 font-medium text-slate-700">暂无用例</p>
+                <p className="mt-2 text-sm leading-6 text-slate-500">可以先加载内嵌示例，快速体验模块筛选、类型筛选、搜索和导出效果。</p>
+                <button
+                  className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                  type="button"
+                  onClick={loadDemoCase}
+                >
+                  <PlayCircle className="size-4" />
+                  体验演示案例
+                </button>
               </div>
             </div>
           )}
