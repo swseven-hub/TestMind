@@ -121,6 +121,18 @@ function useStoredProvider() {
   return normalizeProvider(useStoredValue(storageKeys.provider, "deepseek"));
 }
 
+function subscribeClientReady() {
+  return () => {};
+}
+
+function useClientReady() {
+  return useSyncExternalStore(
+    subscribeClientReady,
+    () => true,
+    () => false,
+  );
+}
+
 type ProgressStatus = "idle" | "running" | "success" | "error";
 
 type ProgressLog = {
@@ -269,6 +281,31 @@ function GenerationProgressModal({
   );
 }
 
+function ApiKeyConfigSkeleton() {
+  return (
+    <div className="mt-4 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+          <KeyRound className="size-4 text-teal-700" />
+          API Key
+        </div>
+        <span className="h-6 w-20 animate-pulse rounded-full bg-white ring-1 ring-slate-200" />
+      </div>
+      <div className="mt-3 grid grid-cols-3 gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200">
+        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
+        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
+        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
+      </div>
+      <div className="mt-3 h-10 animate-pulse rounded-lg bg-white ring-1 ring-slate-200" />
+      <div className="mt-2 flex items-center justify-between gap-3">
+        <span className="h-5 w-28 animate-pulse rounded-md bg-white ring-1 ring-slate-100" />
+        <span className="h-5 w-14 animate-pulse rounded-md bg-white ring-1 ring-slate-100" />
+      </div>
+      <div className="mt-3 h-10 animate-pulse rounded-lg bg-white ring-1 ring-slate-200" />
+    </div>
+  );
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -279,6 +316,7 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
+  const isClientReady = useClientReady();
   const provider = useStoredProvider();
   const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
   const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
@@ -347,6 +385,11 @@ export default function Home() {
   }
 
   async function generate() {
+    if (!isClientReady) {
+      setError("正在读取本机保存的模型配置，请稍后再试。");
+      return;
+    }
+
     if (!file) {
       setError("请选择 PRD PDF。");
       return;
@@ -525,78 +568,82 @@ export default function Home() {
               </div>
             </div>
 
-            <div className="mt-4 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-              <div className="flex items-center justify-between gap-3">
-                <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                  <KeyRound className="size-4 text-teal-700" />
-                  API Key
+            {isClientReady ? (
+              <div className="mt-4 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                <div className="flex items-center justify-between gap-3">
+                  <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <KeyRound className="size-4 text-teal-700" />
+                    API Key
+                  </div>
+                  <span className="rounded-full bg-white px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
+                    {providerLabels[provider]}
+                  </span>
                 </div>
-                <span className="rounded-full bg-white px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
-                  {providerLabels[provider]}
-                </span>
-              </div>
-              <div className="mt-3 grid grid-cols-3 rounded-lg bg-white p-1 ring-1 ring-slate-200">
-                {(["deepseek", "aliyun", "openai"] as const).map((item) => (
+                <div className="mt-3 grid grid-cols-3 rounded-lg bg-white p-1 ring-1 ring-slate-200">
+                  {(["deepseek", "aliyun", "openai"] as const).map((item) => (
+                    <button
+                      key={item}
+                      className={clsx(
+                        "h-8 rounded-md text-sm font-medium transition",
+                        provider === item ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50",
+                      )}
+                      type="button"
+                      onClick={() => {
+                        writeStoredValue(storageKeys.provider, item);
+                        if (!readStoredValue(modelStorageKey(item), "")) {
+                          writeStoredValue(modelStorageKey(item), providerModels[item]);
+                        }
+                      }}
+                    >
+                      {providerLabels[item]}
+                    </button>
+                  ))}
+                </div>
+                <div className="relative mt-3">
+                  <input
+                    className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-3 pr-11 text-sm outline-none transition focus:border-teal-500"
+                    type={showApiKey ? "text" : "password"}
+                    placeholder="sk-..."
+                    value={apiKey}
+                    spellCheck={false}
+                    autoComplete="off"
+                    onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
+                  />
                   <button
-                    key={item}
-                    className={clsx(
-                      "h-8 rounded-md text-sm font-medium transition",
-                      provider === item ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50",
-                    )}
+                    aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
+                    className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
                     type="button"
-                    onClick={() => {
-                      writeStoredValue(storageKeys.provider, item);
-                      if (!readStoredValue(modelStorageKey(item), "")) {
-                        writeStoredValue(modelStorageKey(item), providerModels[item]);
-                      }
-                    }}
+                    onClick={() => setShowApiKey((current) => !current)}
                   >
-                    {providerLabels[item]}
+                    {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
                   </button>
-                ))}
-              </div>
-              <div className="relative mt-3">
+                </div>
+                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+                  <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
+                  <button
+                    className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
+                    disabled={!apiKey.trim()}
+                    type="button"
+                    onClick={clearSavedApiKey}
+                  >
+                    清除密钥
+                  </button>
+                </div>
                 <input
-                  className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-3 pr-11 text-sm outline-none transition focus:border-teal-500"
-                  type={showApiKey ? "text" : "password"}
-                  placeholder="sk-..."
-                  value={apiKey}
+                  className="mt-3 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
+                  placeholder="模型名称"
+                  value={model}
                   spellCheck={false}
-                  autoComplete="off"
-                  onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
+                  onChange={(event) => writeStoredValue(modelStorageKey(provider), event.target.value)}
                 />
-                <button
-                  aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
-                  className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                  type="button"
-                  onClick={() => setShowApiKey((current) => !current)}
-                >
-                  {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                </button>
               </div>
-              <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
-                <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
-                <button
-                  className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
-                  disabled={!apiKey.trim()}
-                  type="button"
-                  onClick={clearSavedApiKey}
-                >
-                  清除密钥
-                </button>
-              </div>
-              <input
-                className="mt-3 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
-                placeholder="模型名称"
-                value={model}
-                spellCheck={false}
-                onChange={(event) => writeStoredValue(modelStorageKey(provider), event.target.value)}
-              />
-            </div>
+            ) : (
+              <ApiKeyConfigSkeleton />
+            )}
 
             <button
               className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={isLoading}
+              disabled={isLoading || !isClientReady}
               onClick={generate}
             >
               {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
