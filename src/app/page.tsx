@@ -10,6 +10,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  History,
   KeyRound,
   ListChecks,
   Loader2,
@@ -18,13 +19,14 @@ import {
   Shield,
   Sparkles,
   Terminal,
+  Trash2,
   UploadCloud,
   X,
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
-import { getTemplateCaseFields, getTemplateCaseRow, testcaseTemplateHeaders } from "@/lib/testcase-template";
+import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type { Complexity, CoverageModule, GenerateResponse, RiskLevel, TestCase, TestCategory } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
@@ -76,9 +78,11 @@ type Provider = keyof typeof providerModels;
 
 const storageKeys = {
   provider: "testmind.provider",
+  runHistory: "testmind.runHistory.v1",
 };
 
 const storageChangeEvent = "testmind.storage-change";
+const maxRunHistory = 8;
 
 function apiKeyStorageKey(provider: Provider) {
   return `testmind.${provider}.apiKey`;
@@ -169,31 +173,94 @@ type StreamEvent =
   | { type: "error"; message: string; detail?: string }
   | { type: "done" };
 
-function downloadJson(data: GenerateResponse) {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${data.fileName.replace(/\.pdf$/i, "")}-test-cases.json`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+type RunHistoryRecord = {
+  id: string;
+  createdAt: string;
+  fileName: string;
+  provider: Provider;
+  model: string;
+  caseCount: number;
+  result: GenerateResponse;
+};
+
+function readRunHistory(): RunHistoryRecord[] {
+  if (typeof window === "undefined") return [];
+
+  try {
+    const raw = window.localStorage.getItem(storageKeys.runHistory);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as RunHistoryRecord[];
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((item) => item?.id && item?.result && Array.isArray(item.result.cases))
+      .slice(0, maxRunHistory);
+  } catch {
+    return [];
+  }
 }
 
-function downloadCsv(data: GenerateResponse) {
-  const rows = [
-    [...testcaseTemplateHeaders],
-    ...data.cases.map((item) => getTemplateCaseRow(item)),
-  ];
-  const csv = rows
-    .map((row) => row.map((cell) => `"${String(cell).replaceAll('"', '""')}"`).join(","))
-    .join("\n");
-  const blob = new Blob([`\uFEFF${csv}`], { type: "text/csv;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const anchor = document.createElement("a");
-  anchor.href = url;
-  anchor.download = `${data.fileName.replace(/\.pdf$/i, "")}-test-cases.csv`;
-  anchor.click();
-  URL.revokeObjectURL(url);
+function writeRunHistory(records: RunHistoryRecord[]) {
+  if (typeof window === "undefined") return false;
+
+  let nextRecords = records.slice(0, maxRunHistory);
+  while (nextRecords.length) {
+    try {
+      window.localStorage.setItem(storageKeys.runHistory, JSON.stringify(nextRecords));
+      window.dispatchEvent(new Event(storageChangeEvent));
+      return true;
+    } catch {
+      nextRecords = nextRecords.slice(0, -1);
+    }
+  }
+
+  try {
+    window.localStorage.removeItem(storageKeys.runHistory);
+    window.dispatchEvent(new Event(storageChangeEvent));
+  } catch {
+    // Ignore storage errors such as private browsing quota restrictions.
+  }
+  return false;
+}
+
+function saveRunHistoryRecord(result: GenerateResponse, provider: Provider, model: string) {
+  const record: RunHistoryRecord = {
+    id: `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+    createdAt: new Date().toISOString(),
+    fileName: result.fileName,
+    provider,
+    model,
+    caseCount: result.cases.length,
+    result,
+  };
+  const saved = writeRunHistory([record, ...readRunHistory().filter((item) => item.id !== record.id)]);
+  return saved ? record : null;
+}
+
+function removeRunHistoryRecord(id: string) {
+  writeRunHistory(readRunHistory().filter((item) => item.id !== id));
+}
+
+function clearRunHistory() {
+  writeRunHistory([]);
+}
+
+function useRunHistory() {
+  return useSyncExternalStore(
+    subscribeStorage,
+    readRunHistory,
+    () => [],
+  );
+}
+
+function formatRunTime(value: string) {
+  const date = new Date(value);
+  if (Number.isNaN(date.getTime())) return "未知时间";
+  return date.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
 }
 
 async function downloadExcel(data: GenerateResponse) {
@@ -389,6 +456,85 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
   );
 }
 
+function RunHistoryPanel({
+  activeRunId,
+  history,
+  onClear,
+  onDelete,
+  onLoad,
+}: {
+  activeRunId: string;
+  history: RunHistoryRecord[];
+  onClear: () => void;
+  onDelete: (id: string) => void;
+  onLoad: (record: RunHistoryRecord) => void;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div className="flex items-center gap-2">
+          <History className="size-4 text-teal-700" />
+          <h2 className="font-semibold">运行记录</h2>
+        </div>
+        {history.length ? (
+          <button className="rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-slate-50 hover:text-slate-900" type="button" onClick={onClear}>
+            清空
+          </button>
+        ) : null}
+      </div>
+
+      {history.length ? (
+        <div className="mt-4 max-h-96 space-y-2 overflow-auto pr-1">
+          {history.map((record) => (
+            <div
+              key={record.id}
+              className={clsx(
+                "rounded-lg border transition",
+                activeRunId === record.id ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
+              )}
+            >
+              <div className="flex items-stretch gap-1 p-3">
+                <button className="min-w-0 flex-1 text-left" type="button" onClick={() => onLoad(record)}>
+                  <div className="flex items-start justify-between gap-3">
+                    <div className="min-w-0">
+                      <p className="truncate text-sm font-medium">{record.fileName}</p>
+                      <p className={clsx("mt-1 text-xs", activeRunId === record.id ? "text-slate-300" : "text-slate-500")}>
+                        {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {record.caseCount} 条
+                      </p>
+                    </div>
+                    <span
+                      className={clsx(
+                        "shrink-0 rounded-full px-2 py-1 text-xs ring-1",
+                        activeRunId === record.id ? "bg-white/10 text-white ring-white/20" : "bg-white text-slate-500 ring-slate-200",
+                      )}
+                    >
+                      {record.result.source === "ai" ? "AI" : "本地"}
+                    </span>
+                  </div>
+                  <p className={clsx("mt-2 truncate text-xs", activeRunId === record.id ? "text-slate-300" : "text-slate-400")}>{record.model}</p>
+                </button>
+                <button
+                  aria-label="删除运行记录"
+                  className={clsx(
+                    "grid size-8 shrink-0 place-items-center rounded-md opacity-70 transition hover:opacity-100",
+                    activeRunId === record.id ? "hover:bg-white/10" : "hover:bg-slate-100",
+                  )}
+                  type="button"
+                  onClick={() => onDelete(record.id)}
+                >
+                  <Trash2 className="size-3.5" />
+                </button>
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <p className="mt-3 text-sm leading-6 text-slate-500">生成成功后会自动保存最近 {maxRunHistory} 次结果，刷新页面后也能继续查看。</p>
+      )}
+    </div>
+  );
+}
+
 function formatCoverageModuleName(module: CoverageModule) {
   if (!module.parent || module.name.includes(module.parent)) return module.name;
   return `${module.parent} / ${module.name}`;
@@ -509,6 +655,8 @@ export default function Home() {
   const provider = useStoredProvider();
   const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
   const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
+  const runHistory = useRunHistory();
+  const [activeRunId, setActiveRunId] = useState("");
   const [showApiKey, setShowApiKey] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>("idle");
@@ -583,6 +731,7 @@ export default function Home() {
     if (!nextFile) return;
     setError("");
     setResult(null);
+    setActiveRunId("");
     setActiveModule("全部");
     setActiveCategory("全部");
     setFile(nextFile);
@@ -595,6 +744,7 @@ export default function Home() {
   function loadDemoCase() {
     setError("");
     setFile(null);
+    setActiveRunId("");
     setResult(demoGenerateResponse);
     setActiveModule("全部");
     setActiveCategory("全部");
@@ -605,6 +755,32 @@ export default function Home() {
     setStreamPreview("");
     setReceivedChars(0);
     setProgressLogs([]);
+  }
+
+  function loadRunRecord(record: RunHistoryRecord) {
+    setError("");
+    setFile(null);
+    setResult(record.result);
+    setActiveRunId(record.id);
+    setActiveModule("全部");
+    setActiveCategory("全部");
+    setQuery("");
+    setProgressOpen(false);
+    setProgressStatus("idle");
+    setProgressError("");
+    setStreamPreview("");
+    setReceivedChars(0);
+    setProgressLogs([]);
+  }
+
+  function deleteRunRecord(id: string) {
+    removeRunHistoryRecord(id);
+    if (activeRunId === id) setActiveRunId("");
+  }
+
+  function deleteAllRunRecords() {
+    clearRunHistory();
+    setActiveRunId("");
   }
 
   async function exportExcel() {
@@ -634,6 +810,7 @@ export default function Home() {
 
     setIsLoading(true);
     setError("");
+    setActiveRunId("");
     setProgressOpen(true);
     setProgressStatus("running");
     setProgressError("");
@@ -703,6 +880,12 @@ export default function Home() {
 
       if (!finalResult) throw new Error("生成结束但没有收到测试用例结果。");
 
+      const savedRecord = saveRunHistoryRecord(finalResult, provider, model.trim() || providerModels[provider]);
+      if (savedRecord) {
+        setActiveRunId(savedRecord.id);
+      } else {
+        setError("测试用例已生成，但浏览器存储空间不足，未能保存本次运行记录。");
+      }
       setProgressStatus("success");
       setActiveModule("全部");
       setActiveCategory("全部");
@@ -897,6 +1080,14 @@ export default function Home() {
 
           <DemoExperienceCard active={isDemoResult} onLoad={loadDemoCase} />
 
+          <RunHistoryPanel
+            activeRunId={activeRunId}
+            history={runHistory}
+            onClear={deleteAllRunRecords}
+            onDelete={deleteRunRecord}
+            onLoad={loadRunRecord}
+          />
+
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">模块</h2>
@@ -992,22 +1183,6 @@ export default function Home() {
                 >
                   {isExportingExcel ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
                   Excel
-                </button>
-                <button
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                  disabled={!result}
-                  onClick={() => result && downloadCsv(result)}
-                >
-                  <Download className="size-4" />
-                  CSV
-                </button>
-                <button
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                  disabled={!result}
-                  onClick={() => result && downloadJson(result)}
-                >
-                  <Download className="size-4" />
-                  JSON
                 </button>
               </div>
             </div>
