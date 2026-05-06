@@ -183,19 +183,34 @@ type RunHistoryRecord = {
   result: GenerateResponse;
 };
 
+const emptyRunHistory: RunHistoryRecord[] = [];
+let runHistoryCacheKey = "";
+let runHistoryCacheValue: RunHistoryRecord[] = emptyRunHistory;
+
 function readRunHistory(): RunHistoryRecord[] {
-  if (typeof window === "undefined") return [];
+  if (typeof window === "undefined") return emptyRunHistory;
 
   try {
-    const raw = window.localStorage.getItem(storageKeys.runHistory);
-    if (!raw) return [];
+    const raw = window.localStorage.getItem(storageKeys.runHistory) || "";
+    if (raw === runHistoryCacheKey) return runHistoryCacheValue;
+    if (!raw) {
+      runHistoryCacheKey = raw;
+      runHistoryCacheValue = emptyRunHistory;
+      return runHistoryCacheValue;
+    }
     const parsed = JSON.parse(raw) as RunHistoryRecord[];
-    if (!Array.isArray(parsed)) return [];
-    return parsed
+    if (!Array.isArray(parsed)) {
+      runHistoryCacheKey = raw;
+      runHistoryCacheValue = emptyRunHistory;
+      return runHistoryCacheValue;
+    }
+    runHistoryCacheKey = raw;
+    runHistoryCacheValue = parsed
       .filter((item) => item?.id && item?.result && Array.isArray(item.result.cases))
       .slice(0, maxRunHistory);
+    return runHistoryCacheValue;
   } catch {
-    return [];
+    return runHistoryCacheValue;
   }
 }
 
@@ -248,7 +263,7 @@ function useRunHistory() {
   return useSyncExternalStore(
     subscribeStorage,
     readRunHistory,
-    () => [],
+    () => emptyRunHistory,
   );
 }
 
