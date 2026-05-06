@@ -2,7 +2,18 @@ import OpenAI from "openai";
 import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { generateFallbackCases } from "@/lib/test-case-generator";
-import type { GenerateResponse, TestCase, TestCategory, TestPriority } from "@/types/test-case";
+import type {
+  CategoryTargetMap,
+  Complexity,
+  CoverageBlueprint,
+  CoverageModule,
+  CoverageTestPoint,
+  GenerateResponse,
+  RiskLevel,
+  TestCase,
+  TestCategory,
+  TestPriority,
+} from "@/types/test-case";
 
 export const runtime = "nodejs";
 export const maxDuration = 300;
@@ -16,29 +27,16 @@ type StreamEvent =
   | { type: "error"; message: string; detail?: string }
   | { type: "done" };
 
-type Complexity = "minimal" | "simple" | "medium" | "complex" | "large";
-type RiskLevel = "low" | "medium" | "high" | "critical";
-type CategoryTargetMap = Partial<Record<TestCategory, number>>;
-
-type ModulePlan = {
-  name: string;
-  parent?: string;
-  description?: string;
-  complexity?: Complexity;
-  riskLevel?: RiskLevel;
-  isCore?: boolean;
-  testPoints?: string[];
-  riskPoints?: string[];
-  categoryTargets?: CategoryTargetMap;
-  skippedCategories?: string[];
-  coverageNotes?: string[];
-  targetCaseCount?: number;
-};
+type ModulePlan = CoverageModule;
 
 type ModulePlanResponse = {
   documentComplexity?: Complexity;
   coverageRationale?: string;
-  modules: ModulePlan[];
+  modules: Array<
+    Partial<Omit<CoverageModule, "testPoints">> & {
+      testPoints?: Array<string | Partial<CoverageTestPoint>>;
+    }
+  >;
 };
 
 type CaseBatchResponse = {
@@ -276,6 +274,60 @@ function normalizeRiskLevel(value: unknown, fallback: RiskLevel = "medium"): Ris
   return fallback;
 }
 
+function normalizeStringList(value: unknown, limit: number) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => String(item).trim()).filter(Boolean).slice(0, limit);
+}
+
+function sanitizeCategoryTargets(value: unknown, max = 999): CategoryTargetMap {
+  const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
+  return Object.fromEntries(categories.map((category) => [category, clamp(Math.round(Number(source[category] ?? 0) || 0), 0, max)])) as Record<TestCategory, number>;
+}
+
+function coverageTotal(coverage: CategoryTargetMap) {
+  return categories.reduce((sum, category) => sum + Math.max(0, Math.round(coverage[category] ?? 0)), 0);
+}
+
+function normalizeTestPoint(value: string | Partial<CoverageTestPoint>, index: number, moduleName: string): CoverageTestPoint {
+  if (typeof value === "string") {
+    const name = value.trim() || `${moduleName}测试点 ${index + 1}`;
+    const coverage = { 功能: 2 } satisfies CategoryTargetMap;
+    return {
+      id: `TP-${String(index + 1).padStart(2, "0")}`,
+      name,
+      evidence: "PRD 显式描述",
+      fields: [],
+      states: [],
+      roles: [],
+      flows: [],
+      rules: [],
+      riskLevel: "medium",
+      riskFactors: [],
+      coverage,
+      expectedCaseCount: coverageTotal(coverage),
+    };
+  }
+
+  const name = value.name?.trim() || `${moduleName}测试点 ${index + 1}`;
+  const coverage = sanitizeCategoryTargets(value.coverage);
+  const expectedCaseCount = Math.max(1, Math.round((value.expectedCaseCount ?? coverageTotal(coverage)) || 1));
+
+  return {
+    id: value.id?.trim() || `TP-${String(index + 1).padStart(2, "0")}`,
+    name,
+    evidence: value.evidence?.trim() || "PRD 显式描述",
+    fields: normalizeStringList(value.fields, 12),
+    states: normalizeStringList(value.states, 12),
+    roles: normalizeStringList(value.roles, 12),
+    flows: normalizeStringList(value.flows, 12),
+    rules: normalizeStringList(value.rules, 12),
+    riskLevel: normalizeRiskLevel(value.riskLevel),
+    riskFactors: normalizeStringList(value.riskFactors, 12),
+    coverage: coverageTotal(coverage) > 0 ? coverage : { 功能: expectedCaseCount },
+    expectedCaseCount,
+  };
+}
+
 function refineComplexity(module: ModulePlan, documentComplexity: Complexity): Complexity {
   const pointCount = module.testPoints?.length ?? 0;
   const riskCount = module.riskPoints?.length ?? 0;
@@ -296,22 +348,36 @@ function estimateTargetCaseCount(module: ModulePlan) {
   const riskLevel = module.riskLevel ?? "medium";
   const riskLevelBump = riskLevel === "critical" ? 8 : riskLevel === "high" ? 5 : riskLevel === "medium" ? 2 : 0;
   const coreBump = module.isCore ? 4 : 0;
+  const pointCoverageTotal = module.testPoints.reduce((sum, point) => sum + (point.expectedCaseCount || coverageTotal(point.coverage)), 0);
   const estimated = bounds.base + pointCount * bounds.perPoint + riskCount * bounds.perRisk + riskLevelBump + coreBump;
-  const requested = typeof module.targetCaseCount === "number" && Number.isFinite(module.targetCaseCount) ? module.targetCaseCount : estimated;
-  return clamp(Math.round(requested), bounds.min, bounds.max);
+  const requested = typeof module.targetCaseCount === "number" && Number.isFinite(module.targetCaseCount) && module.targetCaseCount > 0 ? module.targetCaseCount : Math.max(estimated, pointCoverageTotal);
+  return clamp(Math.round(requested), bounds.min, Math.max(bounds.max, pointCoverageTotal));
 }
 
 function hasCategorySignal(module: ModulePlan, category: Exclude<TestCategory, "功能">) {
-  const text = [module.name, module.parent, module.description, ...(module.testPoints ?? []), ...(module.riskPoints ?? [])].filter(Boolean).join(" ");
+  const pointText = module.testPoints.flatMap((point) => [
+    point.name,
+    point.evidence,
+    ...point.fields,
+    ...point.states,
+    ...point.roles,
+    ...point.flows,
+    ...point.rules,
+    ...point.riskFactors,
+  ]);
+  const text = [module.name, module.parent, module.description, ...pointText, ...(module.riskPoints ?? [])].filter(Boolean).join(" ");
   return categorySignalWords[category].some((word) => text.includes(word));
 }
 
 function normalizeCategoryTargets(module: ModulePlan, total: number): CategoryTargetMap {
-  const rawTargets = module.categoryTargets ?? {};
-  const sanitized = Object.fromEntries(categories.map((category) => [category, clamp(Math.round(rawTargets[category] ?? 0), 0, total)])) as Record<
+  const pointTargets = Object.fromEntries(categories.map((category) => [category, module.testPoints.reduce((sum, point) => sum + Math.max(0, Math.round(point.coverage[category] ?? 0)), 0)])) as Record<
     TestCategory,
     number
   >;
+  const providedTargets = sanitizeCategoryTargets(module.categoryTargets, total);
+  const sanitized = Object.fromEntries(
+    categories.map((category) => [category, clamp(Math.round(providedTargets[category] || pointTargets[category] || 0), 0, total)]),
+  ) as Record<TestCategory, number>;
   const rawTotal = categories.reduce((sum, category) => sum + sanitized[category], 0);
 
   if (rawTotal > 0) {
@@ -355,17 +421,27 @@ function normalizeModulePlan(payload: ModulePlanResponse) {
   const seen = new Set<string>();
   const documentComplexity = normalizeComplexity(payload.documentComplexity, "medium");
   const modules = (payload.modules ?? [])
-    .map((item) => ({
-      ...item,
-      name: item.name?.trim(),
-      parent: item.parent?.trim(),
-      riskLevel: normalizeRiskLevel(item.riskLevel),
-      testPoints: (item.testPoints ?? []).map((point) => point.trim()).filter(Boolean).slice(0, 24),
-      riskPoints: (item.riskPoints ?? []).map((point) => point.trim()).filter(Boolean).slice(0, 12),
-      skippedCategories: (item.skippedCategories ?? []).map((note) => note.trim()).filter(Boolean).slice(0, 5),
-      coverageNotes: (item.coverageNotes ?? []).map((note) => note.trim()).filter(Boolean).slice(0, 5),
-    }))
-    .filter((item) => Boolean(item.name))
+    .map((item): ModulePlan | null => {
+      const name = item.name?.trim();
+      if (!name) return null;
+      const moduleName = name;
+      const testPoints = (item.testPoints ?? []).map((point, pointIndex) => normalizeTestPoint(point, pointIndex, moduleName)).filter((point) => Boolean(point.name)).slice(0, 60);
+      return {
+        name,
+        parent: item.parent?.trim(),
+        description: item.description?.trim(),
+        complexity: normalizeComplexity(item.complexity, documentComplexity),
+        riskLevel: normalizeRiskLevel(item.riskLevel),
+        isCore: Boolean(item.isCore),
+        testPoints,
+        riskPoints: normalizeStringList(item.riskPoints, 16),
+        categoryTargets: sanitizeCategoryTargets(item.categoryTargets),
+        skippedCategories: normalizeStringList(item.skippedCategories, 8),
+        coverageNotes: normalizeStringList(item.coverageNotes, 8),
+        targetCaseCount: typeof item.targetCaseCount === "number" && Number.isFinite(item.targetCaseCount) ? item.targetCaseCount : 0,
+      };
+    })
+    .filter((item): item is ModulePlan => item !== null)
     .filter((item) => {
       const key = formatModuleName(item);
       if (seen.has(key)) return false;
@@ -376,7 +452,7 @@ function normalizeModulePlan(payload: ModulePlanResponse) {
 
   return modules.map((item) => {
     const complexity = refineComplexity(item, documentComplexity);
-    const normalized = { ...item, complexity, name: item.name || "未命名模块" };
+    const normalized = { ...item, complexity, name: item.name || "未命名模块" } as ModulePlan;
     const targetCaseCount = estimateTargetCaseCount(normalized);
     return {
       ...normalized,
@@ -391,7 +467,17 @@ function getRelevantPrdText(text: string, module: ModulePlan) {
     .split(/(?<=[。！？.!?；;])\s+|[\n\r]+/)
     .map((item) => item.replace(/\s+/g, " ").trim())
     .filter((item) => item.length >= 8);
-  const keywords = [module.name, module.parent, ...(module.testPoints ?? []), ...(module.riskPoints ?? [])]
+  const testPointKeywords = module.testPoints.flatMap((point) => [
+    point.name,
+    point.evidence,
+    ...point.fields,
+    ...point.states,
+    ...point.roles,
+    ...point.flows,
+    ...point.rules,
+    ...point.riskFactors,
+  ]);
+  const keywords = [module.name, module.parent, ...testPointKeywords, ...(module.riskPoints ?? [])]
     .filter(Boolean)
     .flatMap((item) => String(item).split(/[、,，/｜|()（）\s]+/))
     .map((item) => item.trim())
@@ -416,6 +502,7 @@ function getCaseTargets(module: ModulePlan) {
     permission: categoryTargets["权限"] ?? 0,
     performance: categoryTargets["性能"] ?? 0,
     categoryTargets,
+    testPoints: module.testPoints,
   };
 }
 
@@ -434,6 +521,11 @@ function getCategoryCounts(cases: TestCase[]) {
   return Object.fromEntries(categories.map((category) => [category, cases.filter((item) => item.category === category).length])) as Record<TestCategory, number>;
 }
 
+function caseMatchesTestPoint(item: TestCase, point: CoverageTestPoint) {
+  const haystack = [item.testPointId, item.testPoint, item.evidence, item.title, item.preconditions, item.expectedResult, ...item.steps].filter(Boolean).join(" ");
+  return haystack.includes(point.id) || haystack.includes(point.name);
+}
+
 function formatTargets(targets: ReturnType<typeof getCaseTargets>) {
   const parts = [
     `功能 ${targets.functional}`,
@@ -445,6 +537,19 @@ function formatTargets(targets: ReturnType<typeof getCaseTargets>) {
   return parts.join("、");
 }
 
+function formatTestPointForPrompt(point: CoverageTestPoint, index: number) {
+  const coverage = categories.map((category) => `${category}:${point.coverage[category] ?? 0}`).join("、");
+  const details = [
+    `字段:${point.fields.join("、") || "无"}`,
+    `状态:${point.states.join("、") || "无"}`,
+    `角色:${point.roles.join("、") || "无"}`,
+    `流程:${point.flows.join("、") || "无"}`,
+    `规则:${point.rules.join("、") || "无"}`,
+    `风险:${point.riskFactors.join("、") || "无"}`,
+  ].join("；");
+  return `${index + 1}. ${point.id}｜${point.name}｜依据：${point.evidence}｜风险：${point.riskLevel}｜覆盖：${coverage}｜${details}`;
+}
+
 function getCoverageGaps(cases: TestCase[], targets: ReturnType<typeof getCaseTargets>) {
   const counts = getCategoryCounts(cases);
   const categoryGaps = Object.fromEntries(
@@ -452,11 +557,28 @@ function getCoverageGaps(cases: TestCase[], targets: ReturnType<typeof getCaseTa
   ) as Record<TestCategory, number>;
   const negativeFunctionalGap = getNegativeCoverageGap(cases, targets);
   categoryGaps["功能"] = Math.max(categoryGaps["功能"], negativeFunctionalGap);
+  const pointGaps = targets.testPoints
+    .map((point) => {
+      const matched = cases.filter((item) => caseMatchesTestPoint(item, point));
+      const categoryGapsForPoint = Object.fromEntries(
+        categories.map((category) => [category, Math.max(0, Math.round(point.coverage[category] ?? 0) - matched.filter((item) => item.category === category).length)]),
+      ) as Record<TestCategory, number>;
+      const totalGapForPoint = categories.reduce((sum, category) => sum + categoryGapsForPoint[category], 0);
+      return { point, categoryGaps: categoryGapsForPoint, totalGap: totalGapForPoint };
+    })
+    .filter((item) => item.totalGap > 0);
+
+  for (const category of categories) {
+    const pointCategoryGap = pointGaps.reduce((sum, item) => sum + item.categoryGaps[category], 0);
+    categoryGaps[category] = Math.max(categoryGaps[category], pointCategoryGap);
+  }
+
   const totalGap = categories.reduce((sum, category) => sum + categoryGaps[category], 0);
 
   return {
     categoryGaps,
     negativeFunctionalGap,
+    pointGaps,
     totalGap,
   };
 }
@@ -472,6 +594,9 @@ function normalizeCases(cases: TestCase[], module: ModulePlan) {
         title: item.title?.trim() || `${formatModuleName(module)}测试用例`,
         priority,
         module: formatModuleName(module),
+        testPointId: item.testPointId?.trim(),
+        testPoint: item.testPoint?.trim(),
+        evidence: item.evidence?.trim(),
         preconditions: item.preconditions?.trim() || `${formatModuleName(module)}模块可访问，测试数据和依赖服务可用。`,
         steps: (item.steps ?? []).map((step) => step.trim()).filter(Boolean),
         expectedResult: item.expectedResult?.trim() || "结果符合 PRD 预期。",
@@ -495,6 +620,16 @@ function dedupeAndRenumber(cases: TestCase[]) {
     ...item,
     id: `TC-${String(index + 1).padStart(3, "0")}`,
   }));
+}
+
+function buildCoverageBlueprint(documentComplexity: Complexity, coverageRationale: string, modules: ModulePlan[]): CoverageBlueprint {
+  const plannedCaseCount = modules.reduce((sum, module) => sum + getCaseTargets(module).total, 0);
+  return {
+    documentComplexity,
+    coverageRationale,
+    modules,
+    plannedCaseCount,
+  };
 }
 
 function buildSummary(fileName: string, modules: ModulePlan[], cases: TestCase[]) {
@@ -542,7 +677,7 @@ async function generateModulePlan({
     apiKey,
     model,
     provider,
-    maxTokens: 5_000,
+    maxTokens: 8_000,
     stageLabel: "模块识别",
     onEvent,
     messages: [
@@ -559,19 +694,22 @@ async function generateModulePlan({
 1. 不要假设产品类型。先从 PRD 自身识别业务域、用户角色、使用场景、端类型和核心对象。
 2. documentComplexity 只能是 minimal/simple/medium/complex/large，用于描述整份 PRD 复杂度。
 3. modules 必须覆盖所有可测试范围：一级模块、子模块、页面/接口/流程/任务、配置项、数据对象、状态机、字段规则、业务规则、通知、报表、导入导出、第三方集成、权限、审计、异常和性能相关能力。
-4. testPoints 列出该模块的原子测试点，不要把多个测试点合成一句；只列 PRD 有依据的测试点。
+4. testPoints 必须是原子测试点对象数组，不要把多个测试点合成一句；只列 PRD 有依据的测试点。
 5. riskPoints 列出该模块需要重点覆盖的边界、异常、权限、安全、兼容、性能、数据一致性和幂等风险。
 6. complexity 只能是 minimal/simple/medium/complex/large；riskLevel 只能是 low/medium/high/critical。
-7. categoryTargets 是该模块各类型建议生成条数，必须由测试点和风险决定，不能为了凑齐五类而硬填。若某类型无 PRD 依据或不适用，数量填 0，并在 skippedCategories 说明。
-8. targetCaseCount 必须等于 categoryTargets 五类之和。数量建议：
+7. 每个 testPoint 必须包含 evidence、fields、states、roles、flows、rules、riskLevel、riskFactors、coverage、expectedCaseCount。
+8. evidence 写 PRD 中可定位的依据，例如章节标题、条款、原文短句，不要写“自行推断”。
+9. coverage 是该原子测试点各类型建议生成条数，必须由字段、状态、角色、流程、规则和风险决定。没有依据的类型填 0。
+10. categoryTargets 是该模块各类型建议生成条数，必须等于所有 testPoint.coverage 的汇总。若某类型无 PRD 依据或不适用，数量填 0，并在 skippedCategories 说明。
+11. targetCaseCount 必须等于 categoryTargets 五类之和。数量建议：
    - minimal 模块通常 4-12 条。
    - simple 模块通常 8-20 条。
    - medium 模块通常 16-36 条。
    - complex/large 核心模块通常 32-64 条。
    这不是硬性最低要求；极简 PRD 总数可以很少，复杂 PRD 可按模块提高。
-9. 功能类通常最多，但边界/异常/权限/性能只在适用时生成。不要把“全面”等同于“每模块五类都要有”。
-10. 不要生成测试用例。
-11. 只输出 JSON：
+12. 功能类通常最多，但边界/异常/权限/性能只在适用时生成。不要把“全面”等同于“每模块五类都要有”。
+13. 不要生成测试用例。
+14. 只输出 JSON：
 {
   "documentComplexity": "simple",
   "coverageRationale": "为什么这样估算覆盖范围和数量",
@@ -583,18 +721,39 @@ async function generateModulePlan({
       "complexity": "simple",
       "riskLevel": "medium",
       "isCore": true,
-      "testPoints": ["显式功能点1", "显式功能点2"],
+      "testPoints": [
+        {
+          "id": "TP-01",
+          "name": "手机号密码登录",
+          "evidence": "PRD 第 5.1 节：已注册用户输入正确手机号和密码后可登录成功",
+          "fields": ["手机号", "密码"],
+          "states": ["账号正常", "账号锁定"],
+          "roles": ["普通用户"],
+          "flows": ["登录提交", "登录结果跳转"],
+          "rules": ["手机号必填且格式合法", "密码必填"],
+          "riskLevel": "high",
+          "riskFactors": ["核心链路", "登录态", "账号状态", "重复提交"],
+          "coverage": {
+            "功能": 4,
+            "边界": 2,
+            "异常": 1,
+            "权限": 1,
+            "性能": 0
+          },
+          "expectedCaseCount": 8
+        }
+      ],
       "riskPoints": ["边界/异常/权限/性能风险点"],
       "categoryTargets": {
-        "功能": 8,
+        "功能": 4,
         "边界": 2,
-        "异常": 2,
+        "异常": 1,
         "权限": 1,
         "性能": 0
       },
       "skippedCategories": ["性能：PRD 未提出高频、大数据量、并发或响应时间要求"],
       "coverageNotes": ["功能类覆盖正向和主要失败路径"],
-      "targetCaseCount": 13
+      "targetCaseCount": 8
     }
   ]
 }
@@ -605,15 +764,15 @@ ${truncatedText}`,
     ],
   });
 
+  const documentComplexity = normalizeComplexity(payload.documentComplexity, "medium");
   const modules = normalizeModulePlan(payload);
+  const blueprint = buildCoverageBlueprint(documentComplexity, payload.coverageRationale?.trim() || "按 PRD 可测试点、风险等级和适用测试类型估算覆盖范围。", modules);
   onEvent({
     type: "stage",
     message: "覆盖蓝图生成完成",
-    detail: `收到 ${rawLength.toLocaleString("zh-CN")} 字符，识别 ${modules.length} 个模块，计划约 ${modules
-      .reduce((sum, module) => sum + getCaseTargets(module).total, 0)
-      .toLocaleString("zh-CN")} 条`,
+    detail: `收到 ${rawLength.toLocaleString("zh-CN")} 字符，识别 ${modules.length} 个模块，计划约 ${blueprint.plannedCaseCount.toLocaleString("zh-CN")} 条`,
   });
-  return modules;
+  return blueprint;
 }
 
 async function generateCasesForModule({
@@ -667,7 +826,7 @@ async function generateCasesForModule({
 模块复杂度：${module.complexity ?? "medium"}
 风险等级：${module.riskLevel ?? "medium"}
 显式测试点：
-${(module.testPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${point}`).join("\n") || "无"}
+${module.testPoints.map(formatTestPointForPrompt).join("\n") || "无"}
 风险点：
 ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${point}`).join("\n") || "无"}
 覆盖蓝图：
@@ -693,6 +852,7 @@ ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${poi
 11. title 必须具体到功能点、条件或状态，不要泛化。
 12. steps 写成可执行动作，expectedResult 写可验证结果。
 13. module 字段统一填写：${moduleName}
+14. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
 
 逆向功能用例示例方向：
 - 身份/访问类：未登录、无权限、角色不匹配、账号状态异常、授权取消、会话过期、多端冲突。
@@ -712,6 +872,9 @@ ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${poi
       "title": "具体测试点",
       "priority": "P0",
       "module": "${moduleName}",
+      "testPointId": "TP-01",
+      "testPoint": "对应原子测试点名称",
+      "evidence": "PRD 依据",
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
       "expectedResult": "预期结果"
@@ -789,7 +952,7 @@ async function generateCoverageRepairCasesForModule({
 模块复杂度：${module.complexity ?? "medium"}
 风险等级：${module.riskLevel ?? "medium"}
 显式测试点：
-${(module.testPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${point}`).join("\n") || "无"}
+${module.testPoints.map(formatTestPointForPrompt).join("\n") || "无"}
 风险点：
 ${(module.riskPoints ?? []).map((point, pointIndex) => `${pointIndex + 1}. ${point}`).join("\n") || "无"}
 
@@ -798,6 +961,14 @@ ${existingCases.map((item, caseIndex) => `${caseIndex + 1}. [${item.category}] $
 
 请补充 ${coverageGaps.totalGap} 条新用例，缺口分布：
 ${categories.filter((category) => coverageGaps.categoryGaps[category] > 0).map((category) => `- ${category}：${coverageGaps.categoryGaps[category]} 条`).join("\n")}
+原子测试点缺口：
+${coverageGaps.pointGaps
+  .slice(0, 24)
+  .map((item) => {
+    const gaps = categories.filter((category) => item.categoryGaps[category] > 0).map((category) => `${category}${item.categoryGaps[category]}`).join("、");
+    return `- ${item.point.id}｜${item.point.name}：${gaps}`;
+  })
+  .join("\n") || "无"}
 
 要求：
 1. 只补当前模块，module 字段统一填写：${moduleName}
@@ -806,6 +977,7 @@ ${categories.filter((category) => coverageGaps.categoryGaps[category] > 0).map((
 4. 不要重复已生成标题，不要写泛化标题。
 5. 每条 steps 必须可执行，expectedResult 必须可验证。
 6. 严格依据 PRD 文本和覆盖蓝图，不要引入无依据的行业假设，不要为了凑数量扩展不存在的功能。
+7. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
 
 只输出 JSON：
 {
@@ -816,6 +988,9 @@ ${categories.filter((category) => coverageGaps.categoryGaps[category] > 0).map((
       "title": "具体补充测试点",
       "priority": "P1",
       "module": "${moduleName}",
+      "testPointId": "TP-01",
+      "testPoint": "对应原子测试点名称",
+      "evidence": "PRD 依据",
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
       "expectedResult": "预期结果"
@@ -905,7 +1080,7 @@ export async function POST(request: Request) {
 
           let result: GenerateResponse;
           if (apiKey) {
-            const modules = await generateModulePlan({
+            const coverageBlueprint = await generateModulePlan({
               apiKey,
               fileName: file.name,
               model,
@@ -913,6 +1088,7 @@ export async function POST(request: Request) {
               provider,
               text,
             });
+            const modules = coverageBlueprint.modules;
 
             if (!modules.length) throw new Error("模型未能识别出可测试功能模块。");
 
@@ -960,6 +1136,7 @@ export async function POST(request: Request) {
               summary: buildSummary(file.name, modules, cases),
               cases,
               warnings,
+              coverageBlueprint,
             };
           } else {
             onEvent({

@@ -24,7 +24,7 @@ import {
 } from "lucide-react";
 import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
-import type { GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
+import type { Complexity, CoverageModule, GenerateResponse, RiskLevel, TestCase, TestCategory } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
 
@@ -54,6 +54,21 @@ const providerLabels = {
   deepseek: "DeepSeek",
   aliyun: "阿里云百炼",
   openai: "OpenAI",
+};
+
+const complexityLabels: Record<Complexity, string> = {
+  minimal: "极简",
+  simple: "简单",
+  medium: "中等",
+  complex: "复杂",
+  large: "大型",
+};
+
+const riskLabels: Record<RiskLevel, string> = {
+  low: "低风险",
+  medium: "中风险",
+  high: "高风险",
+  critical: "关键风险",
 };
 
 type Provider = keyof typeof providerModels;
@@ -165,12 +180,14 @@ function downloadJson(data: GenerateResponse) {
 
 function downloadCsv(data: GenerateResponse) {
   const rows = [
-    ["ID", "分类", "优先级", "模块", "标题", "前置条件", "步骤", "预期结果"],
+    ["ID", "分类", "优先级", "模块", "测试点", "PRD依据", "标题", "前置条件", "步骤", "预期结果"],
     ...data.cases.map((item) => [
       item.id,
       item.category,
       item.priority,
       item.module,
+      item.testPoint ?? "",
+      item.evidence ?? "",
       item.title,
       item.preconditions,
       item.steps.map((step, index) => `${index + 1}. ${step}`).join("\n"),
@@ -361,6 +378,111 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
   );
 }
 
+function formatCoverageModuleName(module: CoverageModule) {
+  if (!module.parent || module.name.includes(module.parent)) return module.name;
+  return `${module.parent} / ${module.name}`;
+}
+
+function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string; result: GenerateResponse | null }) {
+  const blueprint = result?.coverageBlueprint;
+  if (!blueprint) return null;
+
+  const modules = activeModule === "全部" ? blueprint.modules : blueprint.modules.filter((module) => formatCoverageModuleName(module) === activeModule);
+  const visibleModules = modules.length ? modules : blueprint.modules;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <ListChecks className="size-4" />
+            覆盖蓝图
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-normal">
+            {complexityLabels[blueprint.documentComplexity]} PRD · 计划 {blueprint.plannedCaseCount} 条
+          </h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">{blueprint.coverageRationale}</p>
+        </div>
+        <span className="rounded-full bg-slate-50 px-3 py-1 text-sm text-slate-600 ring-1 ring-slate-200">{blueprint.modules.length} 个模块</span>
+      </div>
+
+      <div className="mt-5 divide-y divide-slate-200">
+        {visibleModules.map((module) => {
+          const moduleName = formatCoverageModuleName(module);
+          return (
+            <details key={moduleName} className="group py-4 first:pt-0 last:pb-0" open={activeModule !== "全部"}>
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
+                <div>
+                  <h3 className="font-semibold">{moduleName}</h3>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {complexityLabels[module.complexity]} · {riskLabels[module.riskLevel]} · {module.testPoints.length} 个测试点 · 计划 {module.targetCaseCount} 条
+                  </p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  {categories.map((category) => {
+                    const count = module.categoryTargets[category] ?? 0;
+                    if (!count) return null;
+                    return (
+                      <span key={category} className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", categoryStyles[category])}>
+                        {category} {count}
+                      </span>
+                    );
+                  })}
+                </div>
+              </summary>
+
+              {module.coverageNotes.length || module.skippedCategories.length ? (
+                <div className="mt-3 space-y-1 text-sm leading-6 text-slate-500">
+                  {module.coverageNotes.map((note) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                  {module.skippedCategories.map((note) => (
+                    <p key={note}>{note}</p>
+                  ))}
+                </div>
+              ) : null}
+
+              <div className="mt-4 divide-y divide-slate-100 border-y border-slate-100">
+                {module.testPoints.map((point) => (
+                  <div key={point.id} className="py-3">
+                    <div className="flex flex-wrap items-start justify-between gap-3">
+                      <div className="min-w-0">
+                        <p className="font-medium text-slate-800">{point.name}</p>
+                        <p className="mt-1 text-sm leading-6 text-slate-500">{point.evidence}</p>
+                      </div>
+                      <span className="shrink-0 rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                        {riskLabels[point.riskLevel]} · {point.expectedCaseCount} 条
+                      </span>
+                    </div>
+                    <div className="mt-2 flex flex-wrap gap-2">
+                      {categories.map((category) => {
+                        const count = point.coverage[category] ?? 0;
+                        if (!count) return null;
+                        return (
+                          <span key={category} className={clsx("rounded-full px-2 py-0.5 text-xs ring-1", categoryStyles[category])}>
+                            {category} {count}
+                          </span>
+                        );
+                      })}
+                    </div>
+                    {[point.fields, point.states, point.roles, point.rules, point.riskFactors].some((items) => items.length) ? (
+                      <p className="mt-2 text-xs leading-5 text-slate-400">
+                        {[point.fields.length ? `字段：${point.fields.join("、")}` : "", point.states.length ? `状态：${point.states.join("、")}` : "", point.roles.length ? `角色：${point.roles.join("、")}` : "", point.rules.length ? `规则：${point.rules.join("、")}` : "", point.riskFactors.length ? `风险：${point.riskFactors.join("、")}` : ""]
+                          .filter(Boolean)
+                          .join(" ｜ ")}
+                      </p>
+                    ) : null}
+                  </div>
+                ))}
+              </div>
+            </details>
+          );
+        })}
+      </div>
+    </section>
+  );
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -392,7 +514,7 @@ export default function Home() {
       const categoryMatched = activeCategory === "全部" || item.category === activeCategory;
       const textMatched =
         !normalized ||
-        [item.id, item.title, item.module, item.priority, item.preconditions, item.expectedResult, ...item.steps]
+        [item.id, item.title, item.module, item.priority, item.testPoint, item.evidence, item.preconditions, item.expectedResult, ...item.steps]
           .join(" ")
           .toLowerCase()
           .includes(normalized);
@@ -846,6 +968,8 @@ export default function Home() {
             ) : null}
           </div>
 
+          <CoverageBlueprintPanel activeModule={activeModule} result={result} />
+
           {groupedCases.length > 0 ? (
             <div className="grid gap-5">
               {groupedCases.map((group) => (
@@ -917,6 +1041,13 @@ function CaseCard({ item }: { item: TestCase }) {
           </div>
           <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
           <p className="mt-1 text-sm text-slate-500">{item.module}</p>
+          {item.testPoint || item.evidence ? (
+            <p className="mt-2 text-sm leading-6 text-slate-500">
+              {item.testPoint ? `测试点：${item.testPoint}` : ""}
+              {item.testPoint && item.evidence ? " ｜ " : ""}
+              {item.evidence ? `依据：${item.evidence}` : ""}
+            </p>
+          ) : null}
         </div>
       </div>
 
