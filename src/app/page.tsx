@@ -1213,8 +1213,8 @@ export default function Home() {
 
           {groupedCases.length > 0 ? (
             <div className="grid gap-5">
-              {groupedCases.map((group) => (
-                <section key={group.moduleName} className="space-y-3">
+              {groupedCases.map((group, groupIndex) => (
+                <section key={`${group.moduleName}-${groupIndex}`} className="space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
                     <div>
                       <h3 className="text-lg font-semibold">{group.moduleName}</h3>
@@ -1233,8 +1233,8 @@ export default function Home() {
                     </div>
                   </div>
                   <div className="grid gap-3">
-                    {group.cases.map((item) => (
-                      <CaseCard key={`${item.category}-${item.id}-${item.title}`} item={item} />
+                    {group.cases.map((item, caseIndex) => (
+                      <CaseCard key={`${group.moduleName}-${item.id}-${caseIndex}`} item={item} />
                     ))}
                   </div>
                 </section>
@@ -1325,7 +1325,7 @@ function CaseCard({ item }: { item: TestCase }) {
           <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
           <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
             {item.steps.map((step, index) => (
-              <li key={`${item.id}-${step}`} className="grid grid-cols-[24px_1fr] gap-2">
+              <li key={`${item.id}-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
                 <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
                 <span>{step}</span>
               </li>
@@ -1335,8 +1335,8 @@ function CaseCard({ item }: { item: TestCase }) {
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
           <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-            {template.expectedResults.split("\n").map((line) => (
-              <p key={`${item.id}-${line}`}>{line}</p>
+            {template.expectedResults.split("\n").map((line, index) => (
+              <p key={`${item.id}-expected-${index}`}>{line}</p>
             ))}
           </div>
         </div>
