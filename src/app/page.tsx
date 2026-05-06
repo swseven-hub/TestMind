@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useMemo, useRef, useState, useSyncExternalStore } from "react";
 import {
   AlertCircle,
   Bot,
@@ -55,10 +55,18 @@ const providerLabels = {
 type Provider = keyof typeof providerModels;
 
 const storageKeys = {
-  apiKey: "testmind.apiKey",
-  model: "testmind.model",
   provider: "testmind.provider",
 };
+
+const storageChangeEvent = "testmind.storage-change";
+
+function apiKeyStorageKey(provider: Provider) {
+  return `testmind.${provider}.apiKey`;
+}
+
+function modelStorageKey(provider: Provider) {
+  return `testmind.${provider}.model`;
+}
 
 function readStoredValue(key: string, fallback: string) {
   if (typeof window === "undefined") return fallback;
@@ -70,9 +78,47 @@ function readStoredValue(key: string, fallback: string) {
   }
 }
 
-function readStoredProvider(): Provider {
-  const value = readStoredValue(storageKeys.provider, "deepseek");
+function writeStoredValue(key: string, value: string) {
+  if (typeof window === "undefined") return;
+
+  try {
+    const normalized = value.trim();
+    if (normalized) {
+      window.localStorage.setItem(key, normalized);
+    } else {
+      window.localStorage.removeItem(key);
+    }
+    window.dispatchEvent(new Event(storageChangeEvent));
+  } catch {
+    // Ignore storage errors such as private browsing quota restrictions.
+  }
+}
+
+function subscribeStorage(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+
+  window.addEventListener("storage", callback);
+  window.addEventListener(storageChangeEvent, callback);
+  return () => {
+    window.removeEventListener("storage", callback);
+    window.removeEventListener(storageChangeEvent, callback);
+  };
+}
+
+function useStoredValue(key: string, fallback: string) {
+  return useSyncExternalStore(
+    subscribeStorage,
+    () => readStoredValue(key, fallback),
+    () => fallback,
+  );
+}
+
+function normalizeProvider(value: string): Provider {
   return value === "aliyun" || value === "openai" || value === "deepseek" ? value : "deepseek";
+}
+
+function useStoredProvider() {
+  return normalizeProvider(useStoredValue(storageKeys.provider, "deepseek"));
 }
 
 type ProgressStatus = "idle" | "running" | "success" | "error";
@@ -233,9 +279,9 @@ export default function Home() {
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState("");
-  const [apiKey, setApiKey] = useState(() => readStoredValue(storageKeys.apiKey, ""));
-  const [provider, setProvider] = useState<Provider>(() => readStoredProvider());
-  const [model, setModel] = useState(() => readStoredValue(storageKeys.model, providerModels[readStoredProvider()]));
+  const provider = useStoredProvider();
+  const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
+  const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
   const [showApiKey, setShowApiKey] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>("idle");
@@ -287,36 +333,6 @@ export default function Home() {
       .map(([moduleName, cases]) => ({ moduleName, cases }));
   }, [moduleNames, visibleCases]);
 
-  useEffect(() => {
-    try {
-      window.localStorage.setItem(storageKeys.provider, provider);
-    } catch {
-      // Ignore storage errors such as private browsing quota restrictions.
-    }
-  }, [provider]);
-
-  useEffect(() => {
-    try {
-      const normalized = model.trim();
-      if (normalized) window.localStorage.setItem(storageKeys.model, normalized);
-    } catch {
-      // Ignore storage errors such as private browsing quota restrictions.
-    }
-  }, [model]);
-
-  useEffect(() => {
-    try {
-      const normalized = apiKey.trim();
-      if (normalized) {
-        window.localStorage.setItem(storageKeys.apiKey, normalized);
-      } else {
-        window.localStorage.removeItem(storageKeys.apiKey);
-      }
-    } catch {
-      // Ignore storage errors such as private browsing quota restrictions.
-    }
-  }, [apiKey]);
-
   function pickFile(nextFile?: File) {
     if (!nextFile) return;
     setError("");
@@ -327,12 +343,7 @@ export default function Home() {
   }
 
   function clearSavedApiKey() {
-    setApiKey("");
-    try {
-      window.localStorage.removeItem(storageKeys.apiKey);
-    } catch {
-      // Ignore storage errors such as private browsing quota restrictions.
-    }
+    writeStoredValue(apiKeyStorageKey(provider), "");
   }
 
   async function generate() {
@@ -534,8 +545,10 @@ export default function Home() {
                     )}
                     type="button"
                     onClick={() => {
-                      setProvider(item);
-                      setModel(providerModels[item]);
+                      writeStoredValue(storageKeys.provider, item);
+                      if (!readStoredValue(modelStorageKey(item), "")) {
+                        writeStoredValue(modelStorageKey(item), providerModels[item]);
+                      }
                     }}
                   >
                     {providerLabels[item]}
@@ -550,7 +563,7 @@ export default function Home() {
                   value={apiKey}
                   spellCheck={false}
                   autoComplete="off"
-                  onChange={(event) => setApiKey(event.target.value)}
+                  onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
                 />
                 <button
                   aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
@@ -577,7 +590,7 @@ export default function Home() {
                 placeholder="模型名称"
                 value={model}
                 spellCheck={false}
-                onChange={(event) => setModel(event.target.value)}
+                onChange={(event) => writeStoredValue(modelStorageKey(provider), event.target.value)}
               />
             </div>
 
