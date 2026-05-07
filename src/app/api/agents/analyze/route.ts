@@ -236,11 +236,11 @@ export async function POST(request: Request) {
 
     if (agent === "requirement-review") {
       if (!(file instanceof File)) {
-        return NextResponse.json({ message: "需求评审智能体请上传 PRD PDF。" }, { status: 400 });
+        return NextResponse.json({ message: "需求分析智能体请上传 PRD PDF。" }, { status: 400 });
       }
 
       if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
-        return NextResponse.json({ message: "需求评审智能体仅支持 PDF 文件。" }, { status: 400 });
+        return NextResponse.json({ message: "需求分析智能体仅支持 PDF 文件。" }, { status: 400 });
       }
 
       if (file.size > 15 * 1024 * 1024) {

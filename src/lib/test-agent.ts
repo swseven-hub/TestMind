@@ -53,7 +53,7 @@ function normalizeItem(value: unknown, fallbackTitle: string): AgentAnalysisItem
   };
 }
 
-function normalizeSection(value: unknown, index: number): AgentAnalysisSection | null {
+function normalizeSection(value: unknown, index: number, itemLimit = 12): AgentAnalysisSection | null {
   if (!value || typeof value !== "object") return null;
   const source = value as Partial<AgentAnalysisSection>;
   const title = cleanText(source.title) || `分析项 ${index + 1}`;
@@ -63,7 +63,7 @@ function normalizeSection(value: unknown, index: number): AgentAnalysisSection |
   return {
     title,
     ...(cleanText(source.description) ? { description: cleanText(source.description).slice(0, 260) } : {}),
-    items: items.slice(0, 12),
+    items: items.slice(0, itemLimit),
   };
 }
 
@@ -89,15 +89,17 @@ export function normalizeAgentAnalysisPayload(
   warnings: string[] = [],
 ): AgentAnalysisResponse {
   const payload = value && typeof value === "object" ? (value as Partial<AgentAnalysisResponse>) : {};
+  const sectionLimit = agent === "requirement-review" ? 20 : 6;
+  const itemLimit = agent === "requirement-review" ? 20 : 12;
   const sections = Array.isArray(payload.sections)
-    ? payload.sections.map(normalizeSection).filter((item): item is AgentAnalysisSection => item !== null)
+    ? payload.sections.map((section, index) => normalizeSection(section, index, itemLimit)).filter((item): item is AgentAnalysisSection => item !== null)
     : [];
   const fallbackTitle =
-    agent === "requirement-review" ? "需求评审报告" : agent === "change-impact" ? "变更影响分析报告" : agent === "debug-assistant" ? "Bug 根因分析报告" : "发布风险报告";
+    agent === "requirement-review" ? "需求测试点分析报告" : agent === "change-impact" ? "变更影响分析报告" : agent === "debug-assistant" ? "Bug 根因分析报告" : "发布风险报告";
   const summary =
     cleanText(payload.summary) ||
     (agent === "requirement-review"
-      ? "已完成需求疑点、风险和测试关注点整理。"
+      ? "已完成需求模块、功能点、测试点和注意事项整理。"
       : agent === "change-impact"
         ? "已完成改动影响、风险和重点回归范围整理。"
         : agent === "debug-assistant"
@@ -109,7 +111,7 @@ export function normalizeAgentAnalysisPayload(
     source,
     title: cleanText(payload.title) || fallbackTitle,
     summary,
-    sections: sections.length ? sections.slice(0, 6) : fallbackSections(agent, summary),
+    sections: sections.length ? sections.slice(0, sectionLimit) : fallbackSections(agent, summary),
     checklist: normalizeList(payload.checklist, 16),
     nextActions: normalizeList(payload.nextActions, 12),
     warnings,
@@ -154,7 +156,7 @@ function toItems(sentences: string[], category: string, priority: TestPriority) 
 function fallbackSections(agent: TestAgentAnalysisType, summary: string): AgentAnalysisSection[] {
   return [
     {
-      title: agent === "requirement-review" ? "需求评审" : agent === "change-impact" ? "变更影响" : agent === "debug-assistant" ? "Bug 根因" : "发布风险",
+      title: agent === "requirement-review" ? "需求测试点" : agent === "change-impact" ? "变更影响" : agent === "debug-assistant" ? "Bug 根因" : "发布风险",
       items: [
         {
           title: "分析结果",
@@ -329,24 +331,52 @@ export function generateFallbackAgentAnalysis(agent: TestAgentAnalysisType, inpu
     };
   }
 
-  const questions = pickBySignals(seed, ["是否", "如何", "待定", "需要", "支持", "规则", "默认", "配置", "可选"], 6);
-  const boundaries = pickBySignals(seed, ["字段", "状态", "上限", "下限", "数量", "时间", "金额", "分页", "格式", "枚举"], 6);
-  const permissions = pickBySignals(seed, ["角色", "权限", "登录", "账号", "会员", "管理员", "数据", "隐私", "越权"], 6);
-  const failures = pickBySignals(seed, ["失败", "异常", "错误", "超时", "网络", "接口", "服务", "重复", "取消", "回滚"], 6);
+  const modules = pickBySignals(seed, ["模块", "页面", "功能", "管理", "列表", "详情", "新增", "编辑", "审核", "配置", "接口", "流程"], 8);
+  const functionPoints = pickBySignals(seed, ["支持", "需要", "可以", "允许", "创建", "新增", "编辑", "删除", "查询", "导入", "导出", "提交", "保存", "审核", "同步"], 8);
+  const boundaries = pickBySignals(seed, ["字段", "状态", "上限", "下限", "数量", "时间", "金额", "分页", "格式", "枚举", "为空", "重复"], 6);
+  const attentionPoints = pickBySignals(seed, ["角色", "权限", "登录", "账号", "会员", "管理员", "数据", "隐私", "越权", "失败", "异常", "错误", "超时", "网络", "接口", "服务", "回滚", "性能"], 8);
 
   return {
     agent,
     source: "fallback",
-    title: "需求评审报告",
-    summary: `已基于 ${seed.length} 个需求片段整理需求疑点、边界、权限和异常关注点。`,
+    title: "需求测试点分析报告",
+    summary: `已基于 ${seed.length} 个需求片段提取模块、功能点、测试点和测试注意事项。`,
     sections: [
-      { title: "需求疑点", description: "需要向产品或研发确认的内容。", items: toItems(questions, "疑点", "P1") },
-      { title: "边界条件", description: "字段、状态、数量和流程边界。", items: toItems(boundaries, "边界", "P1") },
-      { title: "权限与数据", description: "角色、登录态、数据隔离和敏感信息。", items: toItems(permissions, "权限", "P0") },
-      { title: "异常场景", description: "失败路径、依赖异常和恢复机制。", items: toItems(failures, "异常", "P1") },
+      {
+        title: "模块与功能点",
+        description: "从需求片段中提取的模块、页面、流程或接口能力。",
+        items: toItems(modules, "模块", "P1").map((item) => ({
+          ...item,
+          suggestion: "围绕该模块继续拆主流程、分支流程、字段规则和异常路径。",
+        })),
+      },
+      {
+        title: "模块测试点",
+        description: "可直接转成用例标题或测试设计条目的功能测试点。",
+        items: toItems(functionPoints, "测试点", "P1").map((item) => ({
+          ...item,
+          suggestion: "优先验证正向路径、关键状态变化和结果落库/展示。",
+        })),
+      },
+      {
+        title: "边界与异常",
+        description: "字段、状态、数量、格式、重复提交和失败路径。",
+        items: toItems(boundaries, "边界", "P1").map((item) => ({
+          ...item,
+          suggestion: "补充边界值、空值、非法值、重复操作和状态不满足场景。",
+        })),
+      },
+      {
+        title: "测试注意事项",
+        description: "测试过程中需要额外盯住的权限、数据、接口、异常和性能点。",
+        items: toItems(attentionPoints, "注意项", "P0").map((item) => ({
+          ...item,
+          suggestion: "执行时关注账号角色、数据隔离、依赖接口、异常提示和可观测日志。",
+        })),
+      },
     ],
-    checklist: ["主流程正向路径明确", "字段规则和状态流转明确", "权限边界明确", "异常提示和回滚规则明确", "数据兼容和历史数据影响明确"],
-    nextActions: ["把 P0 疑点带到需求评审会确认", "将边界和异常项转成测试点", "确认需要研发补充日志或监控的位置"],
+    checklist: ["每个模块覆盖主流程和关键分支", "每个功能点覆盖字段规则和状态变化", "权限和数据隔离单独验证", "异常提示、失败重试和重复提交有测试点", "接口依赖、日志和监控关注点已记录"],
+    nextActions: ["把模块测试点转成用例标题", "按 P0/P1 标记优先回归范围", "补齐边界、异常、权限和数据类测试点", "将执行注意事项同步到测试方案"],
     warnings: ["未检测到可用的模型 API Key，当前报告由本地规则生成。"],
   };
 }
@@ -440,15 +470,18 @@ ${clippedInput}`,
   }
 
   return {
-    maxTokens: 4_500,
-    system: "你是资深测试架构师，专门在需求评审阶段发现漏点、风险、边界、异常、权限和需要反问产品的问题。输出中文、短句、工具型。",
-    user: `请评审下面需求材料，输出需求评审报告。要求：
-1. 不生成测试用例，只做需求评审和测试设计前置分析。
-2. 必须包含需求疑点、边界条件、异常场景、权限与数据、测试风险。
-3. 每个条目要写依据 evidence，不能凭空扩展需求。
-4. priority 只能是 P0/P1/P2。P0 表示不确认会影响核心流程或可能线上事故。
-5. checklist 用短句，适合需求评审会逐项确认。
-6. nextActions 写 3-8 条最该马上做的事。
+    maxTokens: 6_000,
+    system: "你是资深测试分析师，擅长把 PRD 拆成模块、功能点、测试点和执行注意事项。输出中文、短句、工具型，不站在产品评审或需求质疑视角。",
+    user: `请分析下面需求材料，输出需求测试点分析报告。要求：
+1. 先提取文档中的所有业务模块、页面、流程、接口或能力点。
+2. sections 按模块输出；每个 section.title 使用模块名，description 概述该模块包含的功能点。
+3. 每个模块的 items 按功能点列出测试点。item.title 写功能点或测试点短标题；detail 写要测试什么；suggestion 写测试过程中需要注意的点。
+4. 每个条目必须写 evidence，依据输入中的原文或可定位片段，不能凭空扩展需求。
+5. category 优先使用：功能点、测试点、边界、异常、权限、数据、接口、性能、注意事项。
+6. 不把材料缺口或待确认事项作为主目标；只有材料缺失会直接影响测试执行时，才放到注意事项里。
+7. priority 只能是 P0/P1/P2。P0 表示核心流程、资损、权限泄露、数据错误或上线后高影响风险。
+8. checklist 输出跨模块执行注意事项，短句、可勾选。
+9. nextActions 写 3-8 条最该马上做的测试设计动作。
 
 ${commonSchema}
 

@@ -1,11 +1,13 @@
 "use client";
 
-import { useEffect, useState, useSyncExternalStore, type ReactNode } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore, type ReactNode } from "react";
 import Link from "next/link";
 import {
   ArrowLeft,
   Bot,
+  Check,
   CheckCircle2,
+  ChevronDown,
   Eye,
   EyeOff,
   KeyRound,
@@ -146,15 +148,15 @@ function Field({
   label: string;
 }) {
   return (
-    <label className="block">
+    <div className="block">
       <span className="text-sm font-medium text-slate-700">{label}</span>
       {description ? <span className="mt-1 block text-xs leading-5 text-slate-500">{description}</span> : null}
       <div className="mt-2">{children}</div>
-    </label>
+    </div>
   );
 }
 
-function NativeSelect({
+function PlatformSelect({
   options,
   value,
   onChange,
@@ -163,18 +165,77 @@ function NativeSelect({
   value: string;
   onChange: (value: string) => void;
 }) {
+  const [open, setOpen] = useState(false);
+  const rootRef = useRef<HTMLDivElement>(null);
+  const selected = options.find((item) => item.value === value) ?? options[0];
+
+  useEffect(() => {
+    if (!open) return;
+
+    function closeOnOutside(event: MouseEvent | TouchEvent) {
+      if (event.target instanceof Node && rootRef.current && !rootRef.current.contains(event.target)) {
+        setOpen(false);
+      }
+    }
+
+    function closeOnEscape(event: KeyboardEvent) {
+      if (event.key === "Escape") setOpen(false);
+    }
+
+    document.addEventListener("mousedown", closeOnOutside);
+    document.addEventListener("touchstart", closeOnOutside);
+    document.addEventListener("keydown", closeOnEscape);
+    return () => {
+      document.removeEventListener("mousedown", closeOnOutside);
+      document.removeEventListener("touchstart", closeOnOutside);
+      document.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [open]);
+
   return (
-    <select
-      className="h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
-      value={value}
-      onChange={(event) => onChange(event.target.value)}
-    >
-      {options.map((item) => (
-        <option key={item.value} value={item.value}>
-          {item.label}
-        </option>
-      ))}
-    </select>
+    <div ref={rootRef} className="relative">
+      <button
+        aria-expanded={open}
+        aria-haspopup="listbox"
+        className={clsx(
+          "flex min-h-11 w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left text-sm outline-none transition",
+          open ? "border-teal-500 ring-2 ring-teal-500/10" : "border-slate-200 hover:border-slate-300",
+        )}
+        type="button"
+        onClick={() => setOpen((current) => !current)}
+      >
+        <span className="min-w-0 flex-1 break-words leading-5">{selected?.label ?? "请选择"}</span>
+        <ChevronDown className={clsx("size-4 shrink-0 text-slate-500 transition", open && "rotate-180")} />
+      </button>
+      {open ? (
+        <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
+          <div className="max-h-72 overflow-y-auto" role="listbox">
+            {options.map((item) => {
+              const active = item.value === value;
+              return (
+                <button
+                  key={item.value}
+                  aria-selected={active}
+                  className={clsx(
+                    "flex w-full items-start justify-between gap-3 rounded-md px-3 py-2 text-left text-sm transition",
+                    active ? "bg-teal-50 text-teal-800" : "text-slate-700 hover:bg-slate-50 hover:text-slate-950",
+                  )}
+                  role="option"
+                  type="button"
+                  onClick={() => {
+                    onChange(item.value);
+                    setOpen(false);
+                  }}
+                >
+                  <span className="min-w-0 break-words leading-5">{item.label}</span>
+                  {active ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      ) : null}
+    </div>
   );
 }
 
@@ -383,7 +444,7 @@ export default function SettingsPage() {
               ) : null}
 
               <Field label="模型" description="首页所有智能体都会使用这里选择的模型。">
-                <NativeSelect
+                <PlatformSelect
                   options={modelOptionsForProvider(provider)}
                   value={model || providerModels[provider]}
                   onChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
@@ -411,7 +472,7 @@ export default function SettingsPage() {
                 </Field>
               ) : (
                 <Field label="推理等级">
-                  <NativeSelect
+                  <PlatformSelect
                     options={reasoningEffortOptions.map((item) => ({ value: item, label: `${reasoningEffortLabels[item]} · ${reasoningEffortDescriptions[item]}` }))}
                     value={reasoningEffort}
                     onChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}

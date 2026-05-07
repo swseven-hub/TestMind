@@ -146,7 +146,7 @@ function getErrorMessage(error: unknown) {
 
 function assertNotAborted(signal?: AbortSignal) {
   if (signal?.aborted) {
-    const error = new Error("用户已停止本次评审。");
+    const error = new Error("用户已停止本次分析。");
     error.name = "AbortError";
     throw error;
   }
@@ -173,14 +173,14 @@ function getTextInputStageMessage(agent: TestAgentAnalysisType) {
 }
 
 function getThinkingDetail(agent: TestAgentAnalysisType) {
-  if (agent === "requirement-review") return "正在识别需求疑点、边界、异常和权限风险。";
+  if (agent === "requirement-review") return "正在提取需求模块、功能点、测试点和注意事项。";
   if (agent === "change-impact") return "正在识别改动影响、接口风险和重点回归范围。";
   if (agent === "debug-assistant") return "正在定位疑似根因、涉及模块和可疑变更。";
   return "正在判断回归范围、冒烟清单和上线风险。";
 }
 
 function getAiStageMessage(agent: TestAgentAnalysisType) {
-  if (agent === "requirement-review") return "AI 正在评审需求";
+  if (agent === "requirement-review") return "AI 正在分析需求测试点";
   if (agent === "change-impact") return "AI 正在分析变更影响";
   if (agent === "debug-assistant") return "AI 正在分析 Bug 根因";
   return "AI 正在分析发布风险";
@@ -300,7 +300,7 @@ async function streamAnalyzeWithModel({
     if (chunkCount % 25 === 0) {
       onEvent({
         type: "stage",
-        message: "AI 正在持续评审",
+        message: "AI 正在持续分析",
         detail: `已接收 ${content.length.toLocaleString("zh-CN")} 个字符`,
       });
     }
@@ -320,7 +320,7 @@ export async function POST(request: Request) {
         const onEvent = (event: StreamEvent) => send(controller, encoder, event);
 
         try {
-          onEvent({ type: "stage", message: "已收到评审请求" });
+          onEvent({ type: "stage", message: "已收到分析请求" });
           const { body, file } = await readAnalyzeRequest(request);
           assertNotAborted(request.signal);
 
@@ -329,8 +329,8 @@ export async function POST(request: Request) {
           let materialWarnings: string[] = [];
 
           if (agent === "requirement-review") {
-            if (!(file instanceof File)) throw new Error("需求评审智能体请上传 PRD PDF。");
-            if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) throw new Error("需求评审智能体仅支持 PDF 文件。");
+            if (!(file instanceof File)) throw new Error("需求分析智能体请上传 PRD PDF。");
+            if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) throw new Error("需求分析智能体仅支持 PDF 文件。");
             if (file.size > 15 * 1024 * 1024) throw new Error("PDF 文件不能超过 15MB。");
 
             onEvent({
@@ -344,7 +344,7 @@ export async function POST(request: Request) {
             onEvent({
               type: "stage",
               message: "PDF 解析完成",
-              detail: `提取 ${input.length.toLocaleString("zh-CN")} 个字符，准备进入需求评审。`,
+              detail: `提取 ${input.length.toLocaleString("zh-CN")} 个字符，准备进入需求分析。`,
             });
           } else {
             if (body.materialFiles.length || body.referenceFiles.length) {
@@ -398,7 +398,7 @@ export async function POST(request: Request) {
           if (!apiKey) {
             onEvent({
               type: "stage",
-              message: "未检测到 API Key，改用本地规则评审",
+              message: "未检测到 API Key，改用本地规则分析",
               detail: "本次不会调用外部 AI 服务。",
             });
             result = appendWarnings(generateFallbackAgentAnalysis(agent, input), materialWarnings);
@@ -425,7 +425,7 @@ export async function POST(request: Request) {
           const resultWithStats = withStats({ agent, input, model, provider, result, reasoningEffort, startedAt, thinkingMode });
           onEvent({
             type: "stage",
-            message: "评审结果已整理完成",
+            message: "分析结果已整理完成",
             detail: `${resultWithStats.sections.length} 个分组，${resultWithStats.sections.reduce((sum, section) => sum + section.items.length, 0)} 条分析项。`,
           });
           onEvent({ type: "result", data: resultWithStats });
@@ -434,7 +434,7 @@ export async function POST(request: Request) {
           if (!request.signal.aborted) {
             onEvent({
               type: "error",
-              message: "智能体评审失败，请检查材料、模型配置或网络连接。",
+              message: "智能体分析失败，请检查材料、模型配置或网络连接。",
               detail: getErrorMessage(error),
             });
           }

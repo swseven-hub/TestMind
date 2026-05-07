@@ -129,11 +129,11 @@ const agentOptions: Array<{
 }> = [
   {
     value: "requirement-review",
-    label: "需求评审智能体",
-    shortLabel: "评审",
-    description: "上传 PRD PDF，提炼疑点、边界、异常、权限和测试风险。",
+    label: "需求分析智能体",
+    shortLabel: "需求",
+    description: "上传 PRD PDF，按模块提取功能点、测试点和测试注意事项。",
     icon: Brain,
-    actionLabel: "评审 PRD PDF",
+    actionLabel: "分析 PRD PDF",
     placeholder: "",
   },
   {
@@ -249,7 +249,7 @@ function agentModeLabel(agent: TestAgentType) {
 }
 
 function agentOutputTags(agent: TestAgentType) {
-  if (agent === "requirement-review") return ["疑点", "边界", "异常", "权限", "风险"];
+  if (agent === "requirement-review") return ["模块", "功能点", "测试点", "注意项"];
   if (agent === "case-generator") return ["蓝图", "用例", "缺口", "Excel"];
   if (agent === "release-risk") return ["回归", "冒烟", "上线", "风险"];
   if (agent === "change-impact") return ["影响", "接口", "回归", "发版"];
@@ -1196,7 +1196,6 @@ export default function Home() {
   const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
   const idleEventMs = lastEventAt ? now - lastEventAt : elapsedMs;
-  const modelSummary = provider === "aliyun" ? thinkingModeLabels[thinkingMode] : `推理${reasoningEffortLabels[reasoningEffort]}`;
   const workspaceGridClass = leftRailCollapsed
     ? rightRailCollapsed
       ? "lg:grid-cols-[72px_minmax(0,1fr)_72px]"
@@ -1384,7 +1383,7 @@ export default function Home() {
 
   function getAgentRunningCopy() {
     if (activeAgent === "requirement-review") {
-      return { title: "准备开始需求评审", floating: "AI 正在评审" };
+      return { title: "准备开始需求分析", floating: "AI 正在分析需求" };
     }
     if (activeAgent === "change-impact") {
       return { title: "准备开始变更影响分析", floating: "AI 正在分析变更" };
@@ -1529,13 +1528,13 @@ export default function Home() {
         }
       }
 
-      if (!finalResult) throw new Error("智能体分析结束但没有收到评审结果。");
+      if (!finalResult) throw new Error("智能体分析结束但没有收到分析结果。");
 
       setProgressStatus("success");
       setRunCompletedAt(getNowMs());
     } catch (caught) {
       const isAbort = caught instanceof Error && caught.name === "AbortError";
-      const message = isAbort ? "已停止本次评审。" : caught instanceof Error ? caught.message : "智能体分析失败，请稍后重试。";
+      const message = isAbort ? "已停止本次分析。" : caught instanceof Error ? caught.message : "智能体分析失败，请稍后重试。";
       setAgentError(isAbort ? "" : message);
       setProgressStatus(isAbort ? "cancelled" : "error");
       setProgressError((current) => current || message);
@@ -1723,12 +1722,12 @@ export default function Home() {
     if ((!isLoading && !isAgentRunning) || !abortControllerRef.current) return;
     abortControllerRef.current.abort();
     setProgressStatus("cancelled");
-    setProgressError(isAgentRunning ? "正在停止本次评审。" : "正在停止本次生成，停止前的运行日志会保存到历史记录。");
+    setProgressError(isAgentRunning ? "正在停止本次分析。" : "正在停止本次生成，停止前的运行日志会保存到历史记录。");
     setRunCompletedAt(getNowMs());
     appendProgressLog(
       "cancelled",
-      isAgentRunning ? "已请求停止评审" : "已请求停止生成",
-      isAgentRunning ? "正在中断评审模型流式请求。" : "正在中断模型流式请求，后端会记录停止前的阶段和已生成内容。",
+      isAgentRunning ? "已请求停止分析" : "已请求停止生成",
+      isAgentRunning ? "正在中断分析模型流式请求。" : "正在中断模型流式请求，后端会记录停止前的阶段和已生成内容。",
     );
   }
 
@@ -1741,7 +1740,7 @@ export default function Home() {
         detail,
       };
 
-      if (message === "AI 正在持续生成" || message === "模型正在思考") {
+      if (message === "AI 正在持续生成" || message === "AI 正在持续分析" || message === "模型正在思考") {
         const existingIndex = current.findIndex((item) => item.message === message);
         if (existingIndex >= 0) {
           return current.map((item, index) => (index === existingIndex ? { ...item, detail } : item));
@@ -1912,12 +1911,12 @@ export default function Home() {
                 })}
                 {reviewMode ? (
                   <button
-                    aria-label="上传需求评审 PRD"
+                    aria-label="上传需求分析 PRD"
                     className={clsx(
                       "grid size-11 place-items-center rounded-lg border transition",
                       reviewFile ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
                     )}
-                    title={reviewFile ? reviewFile.name : "上传需求评审 PRD"}
+                    title={reviewFile ? reviewFile.name : "上传需求分析 PRD"}
                     type="button"
                     onClick={() => reviewInputRef.current?.click()}
                   >
@@ -1950,20 +1949,6 @@ export default function Home() {
                     <UploadCloud className="size-4" />
                   </button>
                 )}
-                <button
-                  aria-label="打开模型设置"
-                  className={clsx(
-                    "grid size-11 place-items-center rounded-lg border transition",
-                    apiKey.trim() ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
-                  )}
-                  title={`${providerLabels[provider]} / ${model} / ${apiKey.trim() ? "密钥已就绪" : "密钥未保存"}`}
-                  type="button"
-                  onClick={() => {
-                    window.location.href = "/settings";
-                  }}
-                >
-                  <KeyRound className="size-4" />
-                </button>
                 <button
                   aria-label={currentAgentOption.actionLabel}
                   className="grid size-11 place-items-center rounded-lg bg-teal-700 text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
@@ -2049,32 +2034,6 @@ export default function Home() {
                   onRemove={(index) => removeAgentFile("reference", index)}
                 />
               </div>
-            )}
-
-            {isClientReady ? (
-              <Link
-                className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-teal-200 hover:bg-teal-50/30"
-                href="/settings"
-                title="打开模型设置"
-              >
-                <span className="min-w-0">
-                  <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <KeyRound className="size-4 text-teal-700" />
-                    模型设置
-                  </span>
-                  <span className="mt-1 block truncate text-xs text-slate-500">
-                    {providerLabels[provider]} / {model || providerModels[provider]} / {modelSummary} / {apiKey.trim() ? "密钥已就绪" : "密钥未保存"}
-                  </span>
-                </span>
-                <span
-                  className="shrink-0 rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200"
-                  aria-hidden="true"
-                >
-                  设置
-                </span>
-              </Link>
-            ) : (
-              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">正在读取模型设置...</div>
             )}
 
             <button
