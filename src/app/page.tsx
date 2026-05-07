@@ -387,11 +387,19 @@ type ProgressLog = {
   detail?: string;
 };
 
-type StreamEvent =
+type GenerateStreamEvent =
   | { type: "stage"; message: string; detail?: string }
   | { type: "thinking"; message: string; detail?: string }
   | { type: "chunk"; content: string }
   | { type: "result"; data: GenerateResponse }
+  | { type: "error"; message: string; detail?: string }
+  | { type: "done" };
+
+type AgentAnalysisStreamEvent =
+  | { type: "stage"; message: string; detail?: string }
+  | { type: "thinking"; message: string; detail?: string }
+  | { type: "chunk"; content: string }
+  | { type: "result"; data: AgentAnalysisResponse }
   | { type: "error"; message: string; detail?: string }
   | { type: "done" };
 
@@ -422,6 +430,7 @@ function GenerationProgressModal({
   open,
   status,
   streamPreview,
+  title = "AI 生成过程",
   totalChars,
 }: {
   elapsedMs: number;
@@ -434,6 +443,7 @@ function GenerationProgressModal({
   open: boolean;
   status: ProgressStatus;
   streamPreview: string;
+  title?: string;
   totalChars: number;
 }) {
   const streamRef = useRef<HTMLPreElement>(null);
@@ -447,7 +457,7 @@ function GenerationProgressModal({
 
   const statusText: Record<ProgressStatus, string> = {
     idle: "等待",
-    running: "生成中",
+    running: "运行中",
     success: "已完成",
     error: "失败",
     cancelled: "已停止",
@@ -464,7 +474,7 @@ function GenerationProgressModal({
               {status === "running" ? <Loader2 className="size-5 animate-spin" /> : <Terminal className="size-5" />}
             </div>
             <div>
-              <h2 className="font-semibold">AI 生成过程</h2>
+              <h2 className="font-semibold">{title}</h2>
               <p className="mt-0.5 text-sm text-slate-500">
                 {statusText[status]} · 已运行 {formatDuration(elapsedMs)}
               </p>
@@ -1392,11 +1402,13 @@ export default function Home() {
   const [streamPreview, setStreamPreview] = useState("");
   const [receivedChars, setReceivedChars] = useState(0);
   const [progressError, setProgressError] = useState("");
+  const [progressTitle, setProgressTitle] = useState("AI 生成过程");
+  const [progressFloatingTitle, setProgressFloatingTitle] = useState("AI 正在生成");
   const [runStartedAt, setRunStartedAt] = useState(0);
   const [runCompletedAt, setRunCompletedAt] = useState(0);
   const [lastContentAt, setLastContentAt] = useState(0);
   const [lastEventAt, setLastEventAt] = useState(0);
-  const now = useTicker(isLoading || progressOpen);
+  const now = useTicker(isLoading || isAgentRunning || progressOpen);
   const isDemoResult = result?.source === "demo";
   const currentAgentOption = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
   const analysisMode = isAnalysisAgent(activeAgent);
@@ -1545,6 +1557,22 @@ export default function Home() {
     if (nextAgent !== activeAgent && isAnalysisAgent(nextAgent)) setAgentResult(null);
   }
 
+  function startProgress(title: string, floatingTitle: string, firstLog: ProgressLog) {
+    const startedAt = getNowMs();
+    setRunStartedAt(startedAt);
+    setRunCompletedAt(0);
+    setLastContentAt(0);
+    setLastEventAt(startedAt);
+    setProgressOpen(true);
+    setProgressStatus("running");
+    setProgressError("");
+    setProgressTitle(title);
+    setProgressFloatingTitle(floatingTitle);
+    setStreamPreview("");
+    setReceivedChars(0);
+    setProgressLogs([firstLog]);
+  }
+
   async function runAgentAnalysis() {
     if (!isAnalysisAgent(activeAgent)) {
       await generate();
@@ -1560,12 +1588,25 @@ export default function Home() {
 
     setIsAgentRunning(true);
     setAgentError("");
+    startProgress("AI 评审过程", activeAgent === "requirement-review" ? "AI 正在评审" : "AI 正在分析", {
+      id: "agent-start",
+      type: "stage",
+      message: activeAgent === "requirement-review" ? "准备开始需求评审" : "准备开始发布风险分析",
+      detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
+        provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
+      }`,
+    });
     try {
       let response: Response;
+      const abortController = new AbortController();
+      abortControllerRef.current = abortController;
 
       if (activeAgent === "requirement-review") {
         if (!reviewFile) {
           setAgentError("请上传 PRD PDF。");
+          setProgressStatus("error");
+          setProgressError("请上传 PRD PDF。");
+          setRunCompletedAt(getNowMs());
           setIsAgentRunning(false);
           return;
         }
@@ -1580,43 +1621,100 @@ export default function Home() {
         if (apiKey.trim()) formData.append("apiKey", apiKey.trim());
         if (provider === "velotric") formData.append("baseURL", baseURL.trim() || providerBaseURLs.velotric || "");
 
-        response = await fetch("/api/agents/analyze", {
+        response = await fetch("/api/agents/analyze/stream", {
           method: "POST",
           body: formData,
+          signal: abortController.signal,
         });
       } else {
         const input = agentInput.trim();
         if (input.length < 20) {
           setAgentError("请输入至少 20 个字符的发布材料。");
+          setProgressStatus("error");
+          setProgressError("请输入至少 20 个字符的发布材料。");
+          setRunCompletedAt(getNowMs());
           setIsAgentRunning(false);
           return;
         }
 
-        response = await fetch("/api/agents/analyze", {
+        response = await fetch("/api/agents/analyze/stream", {
           method: "POST",
-          headers: { "Content-Type": "application/json" },
           body: JSON.stringify({
-          agent: activeAgent,
-          input,
-          provider,
-          model: model.trim() || providerModels[provider],
-          apiKey: apiKey.trim(),
-          thinkingMode,
-          reasoningEffort,
-          ...(provider === "velotric" ? { baseURL: baseURL.trim() || providerBaseURLs.velotric || "" } : {}),
+            agent: activeAgent,
+            input,
+            provider,
+            model: model.trim() || providerModels[provider],
+            apiKey: apiKey.trim(),
+            thinkingMode,
+            reasoningEffort,
+            ...(provider === "velotric" ? { baseURL: baseURL.trim() || providerBaseURLs.velotric || "" } : {}),
           }),
+          headers: { "Content-Type": "application/json" },
+          signal: abortController.signal,
         });
       }
 
-      const payload = (await response.json().catch(() => null)) as AgentAnalysisResponse | { message?: string } | null;
-      if (!response.ok) {
-        throw new Error(payload && "message" in payload && payload.message ? payload.message : "智能体分析失败，请稍后重试。");
+      if (!response.ok || !response.body) {
+        throw new Error("智能体分析服务没有返回可读取的进度流。");
       }
 
-      setAgentResult(payload as AgentAnalysisResponse);
+      const reader = response.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let finalResult: AgentAnalysisResponse | null = null;
+
+      while (true) {
+        const { value, done } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() ?? "";
+
+        for (const line of lines) {
+          if (!line.trim()) continue;
+          const event = JSON.parse(line) as AgentAnalysisStreamEvent;
+          if (event.type === "stage") {
+            setLastEventAt(getNowMs());
+            appendProgressLog("stage", event.message, event.detail);
+          }
+          if (event.type === "thinking") {
+            setLastEventAt(getNowMs());
+            appendProgressLog("thinking", event.message, event.detail);
+          }
+          if (event.type === "chunk") {
+            const eventTime = getNowMs();
+            setLastEventAt(eventTime);
+            setLastContentAt(eventTime);
+            setReceivedChars((current) => current + event.content.length);
+            setStreamPreview((current) => `${current}${event.content}`.slice(-16_000));
+          }
+          if (event.type === "result") {
+            setLastEventAt(getNowMs());
+            finalResult = event.data;
+            setAgentResult(event.data);
+          }
+          if (event.type === "error") {
+            appendProgressLog("error", event.message, event.detail);
+            setProgressError(event.detail ? `${event.message} ${event.detail}` : event.message);
+            throw new Error(event.message);
+          }
+        }
+      }
+
+      if (!finalResult) throw new Error("智能体分析结束但没有收到评审结果。");
+
+      setProgressStatus("success");
+      setRunCompletedAt(getNowMs());
     } catch (caught) {
-      setAgentError(caught instanceof Error ? caught.message : "智能体分析失败，请稍后重试。");
+      const isAbort = caught instanceof Error && caught.name === "AbortError";
+      const message = isAbort ? "已停止本次评审。" : caught instanceof Error ? caught.message : "智能体分析失败，请稍后重试。";
+      setAgentError(isAbort ? "" : message);
+      setProgressStatus(isAbort ? "cancelled" : "error");
+      setProgressError((current) => current || message);
+      setRunCompletedAt(getNowMs());
     } finally {
+      abortControllerRef.current = null;
       setIsAgentRunning(false);
     }
   }
@@ -1680,6 +1778,8 @@ export default function Home() {
     setProgressOpen(true);
     setProgressStatus("running");
     setProgressError("");
+    setProgressTitle("AI 生成过程");
+    setProgressFloatingTitle("AI 正在生成");
     setStreamPreview("");
     setReceivedChars(0);
     setProgressLogs([
@@ -1734,7 +1834,7 @@ export default function Home() {
 
         for (const line of lines) {
           if (!line.trim()) continue;
-          const event = JSON.parse(line) as StreamEvent;
+          const event = JSON.parse(line) as GenerateStreamEvent;
           if (event.type === "stage") {
             setLastEventAt(getNowMs());
             appendProgressLog("stage", event.message, event.detail);
@@ -1793,12 +1893,16 @@ export default function Home() {
   }
 
   function stopGeneration() {
-    if (!isLoading || !abortControllerRef.current) return;
+    if ((!isLoading && !isAgentRunning) || !abortControllerRef.current) return;
     abortControllerRef.current.abort();
     setProgressStatus("cancelled");
-    setProgressError("正在停止本次生成，停止前的运行日志会保存到历史记录。");
+    setProgressError(isAgentRunning ? "正在停止本次评审。" : "正在停止本次生成，停止前的运行日志会保存到历史记录。");
     setRunCompletedAt(getNowMs());
-    appendProgressLog("cancelled", "已请求停止生成", "正在中断模型流式请求，后端会记录停止前的阶段和已生成内容。");
+    appendProgressLog(
+      "cancelled",
+      isAgentRunning ? "已请求停止评审" : "已请求停止生成",
+      isAgentRunning ? "正在中断评审模型流式请求。" : "正在中断模型流式请求，后端会记录停止前的阶段和已生成内容。",
+    );
   }
 
   function appendProgressLog(type: ProgressLog["type"], message: string, detail?: string) {
@@ -1834,10 +1938,11 @@ export default function Home() {
         open={progressOpen}
         status={progressStatus}
         streamPreview={streamPreview}
+        title={progressTitle}
         totalChars={receivedChars}
       />
 
-      {isLoading && !progressOpen ? (
+      {(isLoading || isAgentRunning) && !progressOpen ? (
         <button
           className="fixed bottom-5 right-5 z-40 inline-flex items-center gap-3 rounded-lg bg-slate-950 px-4 py-3 text-left text-sm font-semibold text-white shadow-xl ring-1 ring-white/10 transition hover:bg-slate-800"
           type="button"
@@ -1845,7 +1950,7 @@ export default function Home() {
         >
           <Loader2 className="size-4 animate-spin" />
           <span>
-            <span className="block">AI 正在生成</span>
+            <span className="block">{progressFloatingTitle}</span>
             <span className="mt-0.5 block text-xs font-normal text-slate-300">已运行 {formatDuration(elapsedMs)}，点击查看过程</span>
           </span>
         </button>
@@ -1863,7 +1968,7 @@ export default function Home() {
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
-            {isLoading ? (
+            {isLoading || isAgentRunning ? (
               <button
                 className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
                 type="button"
