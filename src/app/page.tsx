@@ -52,7 +52,6 @@ import {
 } from "@/lib/model-config";
 import { formatDuration, formatTokens, refreshRunHistory, storageChangeEvent, subscribeStorage, useRunHistory } from "@/lib/run-history";
 import { normalizeTestAgent } from "@/lib/test-agent";
-import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type {
   AgentAnalysisItem,
   AgentAnalysisResponse,
@@ -62,7 +61,6 @@ import type {
   RiskLevel,
   TestAgentAnalysisType,
   TestAgentType,
-  TestCase,
   TestCategory,
 } from "@/types/test-case";
 
@@ -109,6 +107,8 @@ const storageKeys = {
   modulePanelOpen: "testmind.ui.modulePanelOpen.v1",
   categoryPanelOpen: "testmind.ui.categoryPanelOpen.v1",
 };
+
+const currentCaseReportStorageKey = "testmind.currentCaseReport.v1";
 
 type ThemeMode = "light" | "dark" | "system";
 
@@ -218,6 +218,22 @@ function writeStoredValue(key: string, value: string) {
   } catch {
     // Ignore storage errors such as private browsing quota restrictions.
   }
+}
+
+function writeCurrentCaseReport(result: GenerateResponse) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(currentCaseReportStorageKey, JSON.stringify(result));
+  } catch {
+    // Large reports may exceed the browser storage quota; the SQLite record remains the primary detail source.
+  }
+}
+
+function getCaseDetailHref(result: GenerateResponse) {
+  if (result.source === "demo") return "/cases/demo";
+  if (result.historyId) return `/cases/${encodeURIComponent(result.historyId)}`;
+  return "/cases/current";
 }
 
 function useStoredValue(key: string, fallback: string) {
@@ -391,11 +407,12 @@ function GenerationProgressModal({
   };
   const idleContentSeconds = Math.max(0, Math.round(idleContentMs / 1000));
   const idleEventSeconds = Math.max(0, Math.round(idleEventMs / 1000));
+  const completionMessage = title.includes("分析") ? "AI 分析已完成，结果已整理在页面中。" : "AI 生成已完成，报告概览已更新。";
 
   return (
     <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 px-4 py-6 backdrop-blur-sm">
       <div className="flex h-[86vh] w-full max-w-6xl flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-2xl">
-        <div className="flex items-center justify-between gap-4 border-b border-slate-200 px-5 py-4">
+        <div className="flex flex-col gap-3 border-b border-slate-200 px-5 py-4 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white">
               {status === "running" ? <Loader2 className="size-5 animate-spin" /> : <Terminal className="size-5" />}
@@ -407,7 +424,13 @@ function GenerationProgressModal({
               </p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
+            {status === "success" ? (
+              <div className="inline-flex min-h-9 items-center gap-2 rounded-lg border border-emerald-200 bg-emerald-50 px-3 text-sm font-semibold text-emerald-800 shadow-sm">
+                <CheckCircle2 className="size-4" />
+                {completionMessage}
+              </div>
+            ) : null}
             {status === "running" ? (
               <button
                 className="inline-flex h-9 items-center justify-center gap-2 rounded-lg border border-rose-200 bg-rose-50 px-3 text-sm font-medium text-rose-700 transition hover:bg-rose-100"
@@ -1129,25 +1152,17 @@ function AgentSidePanel({
   );
 }
 
-function moduleSectionId(moduleName: string) {
-  let hash = 0;
-  for (const char of moduleName) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
-  return `case-module-${hash.toString(36)}`;
-}
-
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const reviewInputRef = useRef<HTMLInputElement>(null);
   const agentMaterialInputRef = useRef<HTMLInputElement>(null);
   const agentReferenceInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
-  const pendingScrollModuleRef = useRef<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [reviewFile, setReviewFile] = useState<File | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [activeModule, setActiveModule] = useState("全部");
   const [activeCategory, setActiveCategory] = useState<TestCategory | "全部">("全部");
-  const [query, setQuery] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isReviewDragging, setIsReviewDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
@@ -1204,38 +1219,6 @@ export default function Home() {
       ? "lg:grid-cols-[370px_minmax(0,1fr)_72px]"
       : "lg:grid-cols-[370px_minmax(0,1fr)_280px]";
 
-  const visibleCases = useMemo(() => {
-    const normalized = query.trim().toLowerCase();
-    return (result?.cases ?? []).filter((item) => {
-      const template = getTemplateCaseFields(item);
-      const moduleMatched = activeModule === "全部" || item.module === activeModule;
-      const categoryMatched = activeCategory === "全部" || item.category === activeCategory;
-      const textMatched =
-        !normalized ||
-        [
-          item.id,
-          item.title,
-          item.module,
-          item.priority,
-          item.testPoint,
-          item.evidence,
-          item.preconditions,
-          item.expectedResult,
-          template.caseType,
-          template.executionType,
-          template.maintainer,
-          template.followers,
-          template.relatedWorkItems,
-          template.remarks,
-          ...item.steps,
-        ]
-          .join(" ")
-          .toLowerCase()
-          .includes(normalized);
-      return moduleMatched && categoryMatched && textMatched;
-    });
-  }, [activeCategory, activeModule, query, result]);
-
   const moduleCounts = useMemo(() => {
     const data: Record<string, number> = {};
     for (const item of result?.cases ?? []) data[item.module] = (data[item.module] ?? 0) + 1;
@@ -1246,6 +1229,7 @@ export default function Home() {
     () => Object.keys(moduleCounts).sort((a, b) => moduleCounts[b] - moduleCounts[a] || a.localeCompare(b, "zh-CN")),
     [moduleCounts],
   );
+  const caseDetailHref = result ? getCaseDetailHref(result) : "/cases/current";
 
   const categoryCounts = useMemo(() => {
     const data = Object.fromEntries(categories.map((category) => [category, 0])) as Record<TestCategory, number>;
@@ -1255,37 +1239,8 @@ export default function Home() {
     return data;
   }, [activeModule, result]);
 
-  const groupedCases = useMemo(() => {
-    const moduleOrder = new Map(moduleNames.map((moduleName, index) => [moduleName, index]));
-    const data = new Map<string, TestCase[]>();
-    for (const item of visibleCases) data.set(item.module, [...(data.get(item.module) ?? []), item]);
-    return [...data.entries()]
-      .sort((a, b) => (moduleOrder.get(a[0]) ?? 999) - (moduleOrder.get(b[0]) ?? 999))
-      .map(([moduleName, cases]) => ({ moduleName, cases }));
-  }, [moduleNames, visibleCases]);
-
-  useEffect(() => {
-    const moduleName = pendingScrollModuleRef.current;
-    if (!moduleName) return;
-
-    pendingScrollModuleRef.current = null;
-    window.setTimeout(() => {
-      const target = moduleName === "全部" ? document.getElementById("case-results") : document.getElementById(moduleSectionId(moduleName));
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
-  }, [groupedCases]);
-
-  function scrollToCases(moduleName = activeModule) {
-    window.setTimeout(() => {
-      const target = moduleName === "全部" ? document.getElementById("case-results") : document.getElementById(moduleSectionId(moduleName));
-      target?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
-  }
-
   function selectModule(moduleName: string) {
-    pendingScrollModuleRef.current = moduleName;
     setActiveModule(moduleName);
-    if (moduleName === activeModule) scrollToCases(moduleName);
   }
 
   function toggleStoredBoolean(key: string, current: boolean) {
@@ -1407,6 +1362,20 @@ export default function Home() {
       return;
     }
 
+    if (activeAgent === "requirement-review") {
+      if (!reviewFile) {
+        setAgentError("请上传 PRD PDF。");
+        return;
+      }
+    } else {
+      const input = activeAgent === "debug-assistant" ? "" : agentInput.trim();
+      const hasUploadedMaterials = agentMaterialFiles.length > 0 || agentReferenceFiles.length > 0;
+      if (input.length < 20 && !hasUploadedMaterials) {
+        setAgentError(getAnalysisInputError());
+        return;
+      }
+    }
+
     setIsAgentRunning(true);
     setAgentError("");
     const runningCopy = getAgentRunningCopy();
@@ -1424,18 +1393,9 @@ export default function Home() {
       abortControllerRef.current = abortController;
 
       if (activeAgent === "requirement-review") {
-        if (!reviewFile) {
-          setAgentError("请上传 PRD PDF。");
-          setProgressStatus("error");
-          setProgressError("请上传 PRD PDF。");
-          setRunCompletedAt(getNowMs());
-          setIsAgentRunning(false);
-          return;
-        }
-
         const formData = new FormData();
         formData.append("agent", activeAgent);
-        formData.append("file", reviewFile);
+        formData.append("file", reviewFile as File);
         formData.append("provider", provider);
         formData.append("model", model.trim() || providerModels[provider]);
         formData.append("thinkingMode", thinkingMode);
@@ -1450,17 +1410,6 @@ export default function Home() {
         });
       } else {
         const input = activeAgent === "debug-assistant" ? "" : agentInput.trim();
-        const hasUploadedMaterials = agentMaterialFiles.length > 0 || agentReferenceFiles.length > 0;
-        if (input.length < 20 && !hasUploadedMaterials) {
-          const inputError = getAnalysisInputError();
-          setAgentError(inputError);
-          setProgressStatus("error");
-          setProgressError(inputError);
-          setRunCompletedAt(getNowMs());
-          setIsAgentRunning(false);
-          return;
-        }
-
         const formData = new FormData();
         formData.append("agent", activeAgent);
         formData.append("input", input);
@@ -1548,10 +1497,10 @@ export default function Home() {
   function loadDemoCase() {
     setError("");
     setFile(null);
+    writeCurrentCaseReport(demoGenerateResponse);
     setResult(demoGenerateResponse);
     setActiveModule("全部");
     setActiveCategory("全部");
-    setQuery("");
     setProgressOpen(false);
     setProgressStatus("idle");
     setProgressError("");
@@ -1679,6 +1628,7 @@ export default function Home() {
           if (event.type === "result") {
             setLastEventAt(getNowMs());
             finalResult = event.data;
+            writeCurrentCaseReport(event.data);
             setResult(event.data);
           }
           if (event.type === "error") {
@@ -2060,119 +2010,112 @@ export default function Home() {
             <AgentAnalysisWorkspace activeAgent={activeAgent} error={agentError} isRunning={isAgentRunning} result={agentResult} />
           ) : (
             <>
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
-              <div className="min-w-0">
-                <h2 className="text-2xl font-semibold tracking-normal">测试用例</h2>
-                <p className="mt-1 break-words text-sm text-slate-500">{result?.summary ?? "等待 PRD 解析"}</p>
-                <div className="mt-3 flex flex-wrap gap-2 text-xs">
-                  <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
-                    当前可见 {visibleCases.length} 条
-                  </span>
-                  <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">
-                    {sourceLabel}
-                  </span>
-                </div>
-              </div>
-              <div className="flex flex-wrap items-center gap-2">
-                <DemoExperiencePopover active={isDemoResult} open={demoDetailsOpen} onLoad={loadDemoCase} onOpenChange={setDemoDetailsOpen} />
-                <label className="relative block min-w-[180px] flex-1">
-                  <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
-                  <input
-                    className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none transition focus:border-teal-500 focus:bg-white"
-                    placeholder="搜索"
-                    value={query}
-                    onChange={(event) => setQuery(event.target.value)}
-                  />
-                </label>
-                <button
-                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-                  disabled={!result || isExportingExcel}
-                  onClick={exportExcel}
-                >
-                  {isExportingExcel ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-                  Excel
-                </button>
-              </div>
-            </div>
-
-            {result?.warnings.length ? (
-              <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
-                {result.warnings.join(" ")}
-              </div>
-            ) : null}
-          </div>
-
-          <RunStatsPanel result={result} />
-
-          <CoverageBlueprintPanel activeModule={activeModule} result={result} />
-
-          {groupedCases.length > 0 ? (
-            <div className="grid gap-5">
-              {groupedCases.map((group, groupIndex) => (
-                <section id={moduleSectionId(group.moduleName)} key={`${group.moduleName}-${groupIndex}`} className="scroll-mt-24 space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
-                    <div>
-                      <h3 className="break-words text-lg font-semibold">{group.moduleName}</h3>
-                      <p className="mt-1 text-sm text-slate-500">{group.cases.length} 条测试用例</p>
-                    </div>
-                    <div className="flex flex-wrap gap-2">
-                      {categories.map((category) => {
-                        const count = group.cases.filter((item) => item.category === category).length;
-                        if (!count) return null;
-                        return (
-                          <span key={category} className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", categoryStyles[category])}>
-                            {category} {count}
+              {result ? (
+                <>
+                  <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                    <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+                      <div className="min-w-0">
+                        <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+                          <FileText className="size-4" />
+                          生成报告
+                        </div>
+                        <h2 className="mt-2 text-2xl font-semibold tracking-normal">测试设计概览</h2>
+                        <p className="mt-1 break-words text-sm leading-6 text-slate-500">{result.summary}</p>
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                          <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
+                            {result.cases.length} 条测试点
                           </span>
+                          <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
+                            {moduleNames.length} 个模块
+                          </span>
+                          <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">
+                            {sourceLabel}
+                          </span>
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap items-center gap-2">
+                        <DemoExperiencePopover active={isDemoResult} open={demoDetailsOpen} onLoad={loadDemoCase} onOpenChange={setDemoDetailsOpen} />
+                        <Link
+                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                          href={caseDetailHref}
+                        >
+                          <ListChecks className="size-4" />
+                          查看全部测试点
+                        </Link>
+                        <button
+                          className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                          disabled={isExportingExcel}
+                          onClick={exportExcel}
+                        >
+                          {isExportingExcel ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                          Excel
+                        </button>
+                      </div>
+                    </div>
+
+                    {result.warnings.length ? (
+                      <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+                        {result.warnings.join(" ")}
+                      </div>
+                    ) : null}
+                  </div>
+
+                  <RunStatsPanel result={result} />
+
+                  <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+                    {[
+                      { label: "模块", value: `${moduleNames.length} 个`, desc: moduleNames.slice(0, 3).join("、") || "未识别" },
+                      { label: "测试点", value: `${result.cases.length} 条`, desc: result.coverageBlueprint ? `蓝图计划 ${result.coverageBlueprint.plannedCaseCount} 条` : "本地规则生成" },
+                      { label: "覆盖类型", value: `${categories.filter((category) => result.cases.some((item) => item.category === category)).length} 类`, desc: categories.filter((category) => result.cases.some((item) => item.category === category)).join("、") || "待生成" },
+                      { label: "导出", value: "Excel", desc: "详情页可分页查看全部测试点" },
+                    ].map((item) => (
+                      <div key={item.label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                        <p className="text-xs font-medium text-slate-400">{item.label}</p>
+                        <p className="mt-2 text-xl font-semibold text-slate-900">{item.value}</p>
+                        <p className="mt-1 break-words text-xs leading-5 text-slate-500">{item.desc}</p>
+                      </div>
+                    ))}
+                  </div>
+
+                  <CoverageBlueprintPanel activeModule={activeModule} result={result} />
+                </>
+              ) : (
+                <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                  <div className="w-full max-w-2xl">
+                    <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
+                      <FileText className="size-7" />
+                    </div>
+                    <p className="mt-4 text-lg font-semibold text-slate-800">还没有生成测试用例</p>
+                    <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
+                      从左侧上传 PRD 后开始生成；也可以先加载演示案例，快速查看报告概览、覆盖蓝图和详情页效果。
+                    </p>
+                    <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
+                      {[
+                        { icon: UploadCloud, title: "上传 PRD", desc: file ? "已选择文档" : "支持 PDF 文本层" },
+                        { icon: KeyRound, title: "全局模型", desc: "在设置页统一维护" },
+                        { icon: Sparkles, title: "生成报告", desc: "详情页查看测试点" },
+                      ].map((item) => {
+                        const Icon = item.icon;
+                        return (
+                          <div key={item.title} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                            <Icon className="size-4 text-teal-700" />
+                            <p className="mt-2 text-sm font-semibold text-slate-800">{item.title}</p>
+                            <p className="mt-1 text-xs text-slate-500">{item.desc}</p>
+                          </div>
                         );
                       })}
                     </div>
+                    <button
+                      className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                      type="button"
+                      onClick={loadDemoCase}
+                    >
+                      <PlayCircle className="size-4" />
+                      体验演示案例
+                    </button>
                   </div>
-                  <div className="grid gap-3">
-                    {group.cases.map((item, caseIndex) => (
-                      <CaseCard key={`${group.moduleName}-${item.id}-${caseIndex}`} item={item} />
-                    ))}
-                  </div>
-                </section>
-              ))}
-            </div>
-          ) : (
-            <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
-              <div className="w-full max-w-2xl">
-                <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
-                  <FileText className="size-7" />
                 </div>
-                <p className="mt-4 text-lg font-semibold text-slate-800">还没有生成测试用例</p>
-                <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
-                  从左侧上传 PRD、确认模型配置后开始生成；也可以先加载演示案例，快速查看筛选、覆盖蓝图和 Excel 导出效果。
-                </p>
-                <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
-                  {[
-                    { icon: UploadCloud, title: "上传 PRD", desc: file ? "已选择文档" : "支持 PDF 文本层" },
-                    { icon: KeyRound, title: "配置模型", desc: apiKey.trim() ? "密钥已就绪" : "可使用本地兜底" },
-                    { icon: Sparkles, title: "生成用例", desc: "按模块覆盖缺口" },
-                  ].map((item) => {
-                    const Icon = item.icon;
-                    return (
-                      <div key={item.title} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-                        <Icon className="size-4 text-teal-700" />
-                        <p className="mt-2 text-sm font-semibold text-slate-800">{item.title}</p>
-                        <p className="mt-1 text-xs text-slate-500">{item.desc}</p>
-                      </div>
-                    );
-                  })}
-                </div>
-                <button
-                  className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
-                  type="button"
-                  onClick={loadDemoCase}
-                >
-                  <PlayCircle className="size-4" />
-                  体验演示案例
-                </button>
-              </div>
-            </div>
-          )}
+              )}
             </>
           )}
         </section>
@@ -2214,7 +2157,7 @@ export default function Home() {
                   ) : (
                     <>
                       <button
-                        aria-label="查看模块目录"
+                        aria-label="查看报告概览"
                         className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
                         title={`模块 ${moduleNames.length} 个`}
                         type="button"
@@ -2226,7 +2169,7 @@ export default function Home() {
                         <ListChecks className="size-4" />
                       </button>
                       <button
-                        aria-label="查看类型筛选"
+                        aria-label="查看类型分布"
                         className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
                         title={`当前类型：${activeCategory}`}
                         type="button"
@@ -2248,8 +2191,8 @@ export default function Home() {
                 <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                   <div className="flex items-center justify-between gap-3">
                     <div>
-                      <h2 className="font-semibold">目录</h2>
-                      <p className="mt-0.5 text-xs text-slate-500">模块跳转与类型筛选</p>
+                      <h2 className="font-semibold">概览</h2>
+                      <p className="mt-0.5 text-xs text-slate-500">模块与类型统计</p>
                     </div>
                     <button
                       aria-label="收起目录面板"
@@ -2270,8 +2213,8 @@ export default function Home() {
                     type="button"
                     onClick={() => toggleStoredBoolean(storageKeys.modulePanelOpen, modulePanelOpen)}
                   >
-                    <span>
-                      <span className="block font-semibold">模块</span>
+                      <span>
+                      <span className="block font-semibold">模块概览</span>
                       <span className="mt-0.5 block text-xs text-slate-500">{result?.cases.length ?? 0} 条 · {moduleNames.length} 个模块</span>
                     </span>
                     <ChevronDown className={clsx("size-4 text-slate-500 transition", modulePanelOpen && "rotate-180")} />
@@ -2314,8 +2257,8 @@ export default function Home() {
                     type="button"
                     onClick={() => toggleStoredBoolean(storageKeys.categoryPanelOpen, categoryPanelOpen)}
                   >
-                    <span>
-                      <span className="block font-semibold">类型</span>
+                      <span>
+                      <span className="block font-semibold">类型分布</span>
                       <span className="mt-0.5 block max-w-48 truncate text-xs text-slate-500">{activeModule} / {activeCategory}</span>
                     </span>
                     <ChevronDown className={clsx("size-4 text-slate-500 transition", categoryPanelOpen && "rotate-180")} />
@@ -2362,91 +2305,5 @@ export default function Home() {
         </aside>
       </section>
     </main>
-  );
-}
-
-function CaseCard({ item }: { item: TestCase }) {
-  const Icon = categoryIcons[item.category];
-  const template = getTemplateCaseFields(item);
-  const templateMeta = [
-    ["模块", template.module],
-    ["编号", template.id || "自动新建"],
-    ["状态", template.status || "未设置"],
-    ["维护人", template.maintainer],
-    ["用例类型", template.caseType],
-    ["重要程度", template.priority],
-    ["测试类型", template.executionType],
-    ["预估工时", template.estimatedHours === null ? "未估算" : String(template.estimatedHours)],
-    ["剩余工时", template.remainingHours === null ? "未估算" : String(template.remainingHours)],
-    ["关联工作项", template.relatedWorkItems || "无"],
-    ["关注人", template.followers],
-  ];
-
-  return (
-    <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={clsx("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ring-1", categoryStyles[item.category])}>
-              <Icon className="size-3.5" />
-              {item.category}
-            </span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">重要程度 {template.priority}</span>
-            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
-            <span className="text-xs text-slate-400">{template.id}</span>
-          </div>
-          <h3 className="mt-3 text-base font-semibold leading-snug text-slate-900">{item.title}</h3>
-          <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
-          {item.testPoint || item.evidence ? (
-            <p className="mt-2 break-words text-sm leading-6 text-slate-500">
-              {item.testPoint ? `测试点：${item.testPoint}` : ""}
-              {item.testPoint && item.evidence ? " ｜ " : ""}
-              {item.evidence ? `依据：${item.evidence}` : ""}
-            </p>
-          ) : null}
-        </div>
-      </div>
-
-      <div className="mt-4 grid gap-2 rounded-lg bg-slate-50 p-3 text-sm sm:grid-cols-2 lg:grid-cols-3">
-        {templateMeta.map(([label, value]) => (
-          <div key={label} className="min-w-0">
-            <span className="text-xs font-medium text-slate-400">{label}</span>
-            <p className="mt-1 break-words text-slate-700">{value}</p>
-          </div>
-        ))}
-      </div>
-
-      <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_1.2fr_1fr]">
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
-          <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
-        </div>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
-          <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-            {item.steps.map((step, index) => (
-              <li key={`${item.id}-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
-                <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
-                <span className="min-w-0 break-words">{step}</span>
-              </li>
-            ))}
-          </ol>
-        </div>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
-          <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-            {template.expectedResults.split("\n").map((line, index) => (
-              <p key={`${item.id}-expected-${index}`} className="break-words">{line}</p>
-            ))}
-          </div>
-        </div>
-      </div>
-      {template.remarks ? (
-        <div className="mt-4 rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">备注</p>
-          <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{template.remarks}</p>
-        </div>
-      ) : null}
-    </article>
   );
 }

@@ -116,6 +116,7 @@ export type TestCase = {
 
 export type GenerateResponse = {
   source: "ai" | "fallback" | "demo";
+  historyId?: string;
   fileName: string;
   summary: string;
   cases: TestCase[];

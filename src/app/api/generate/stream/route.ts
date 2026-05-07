@@ -1626,6 +1626,10 @@ export async function POST(request: Request) {
               ...(provider === "aliyun" ? { thinkingMode } : {}),
               result,
             });
+            result = {
+              ...result,
+              historyId: savedRecord.id,
+            };
             onEvent({
               type: "stage",
               message: "运行记录已保存",
