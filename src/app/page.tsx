@@ -109,6 +109,7 @@ const storageKeys = {
 };
 
 const currentCaseReportStorageKey = "testmind.currentCaseReport.v1";
+const currentAgentAnalysisStorageKey = "testmind.currentAgentAnalysis.v1";
 
 type ThemeMode = "light" | "dark" | "system";
 
@@ -230,10 +231,24 @@ function writeCurrentCaseReport(result: GenerateResponse) {
   }
 }
 
+function writeCurrentAgentAnalysis(result: AgentAnalysisResponse) {
+  if (typeof window === "undefined") return;
+
+  try {
+    window.sessionStorage.setItem(currentAgentAnalysisStorageKey, JSON.stringify(result));
+  } catch {
+    // Analysis reports are kept in page state if sessionStorage quota is unavailable.
+  }
+}
+
 function getCaseDetailHref(result: GenerateResponse) {
   if (result.source === "demo") return "/cases/demo";
   if (result.historyId) return `/cases/${encodeURIComponent(result.historyId)}`;
   return "/cases/current";
+}
+
+function getAnalysisDetailHref(result: AgentAnalysisResponse) {
+  return `/analysis/${encodeURIComponent(result.agent)}`;
 }
 
 function useStoredValue(key: string, fallback: string) {
@@ -989,6 +1004,9 @@ function AgentAnalysisWorkspace({
 }) {
   const agent = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
   const Icon = agent.icon;
+  const itemCount = result?.sections.reduce((sum, section) => sum + section.items.length, 0) ?? 0;
+  const p0Count = result?.sections.reduce((sum, section) => sum + section.items.filter((item) => item.priority === "P0").length, 0) ?? 0;
+  const isRequirementAnalysis = activeAgent === "requirement-review";
 
   return (
     <>
@@ -1030,6 +1048,72 @@ function AgentAnalysisWorkspace({
             <p className="mt-1 text-sm text-slate-500">{activeAgent === "debug-assistant" ? "正在整理根因、模块和修复建议。" : "正在整理风险、清单和下一步动作。"}</p>
           </div>
         </div>
+      ) : result && isRequirementAnalysis ? (
+        <>
+          {result.warnings.length ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {result.warnings.join(" ")}
+            </div>
+          ) : null}
+
+          <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+            {[
+              { label: "模块", value: `${result.sections.length} 个`, desc: result.sections.slice(0, 3).map((section) => section.title).join("、") || "待分析" },
+              { label: "测试点", value: `${itemCount} 条`, desc: "详细内容在二级页面查看" },
+              { label: "P0 关注", value: `${p0Count} 条`, desc: "核心流程、权限、数据或高影响风险" },
+              { label: "清单", value: `${result.checklist.length} 项`, desc: "跨模块执行注意事项" },
+            ].map((item) => (
+              <div key={item.label} className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <p className="text-xs font-medium text-slate-400">{item.label}</p>
+                <p className="mt-2 text-xl font-semibold text-slate-900">{item.value}</p>
+                <p className="mt-1 break-words text-xs leading-5 text-slate-500">{item.desc}</p>
+              </div>
+            ))}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-[minmax(0,1fr)_320px]">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                <div className="min-w-0">
+                  <h3 className="font-semibold">模块概览</h3>
+                  <p className="mt-1 text-sm leading-6 text-slate-500">首页只保留报告摘要；全部模块测试点放到详情页集中查看。</p>
+                </div>
+                <Link
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                  href={getAnalysisDetailHref(result)}
+                >
+                  <ListChecks className="size-4" />
+                  查看全部测试点
+                </Link>
+              </div>
+              <div className="mt-4 grid gap-2">
+                {result.sections.slice(0, 6).map((section) => (
+                  <div key={section.title} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                    <div className="flex flex-wrap items-center justify-between gap-2">
+                      <p className="break-words text-sm font-semibold text-slate-800">{section.title}</p>
+                      <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-500 ring-1 ring-slate-200">{section.items.length} 条</span>
+                    </div>
+                    {section.description ? <p className="mt-1 break-words text-xs leading-5 text-slate-500">{section.description}</p> : null}
+                  </div>
+                ))}
+                {result.sections.length > 6 ? (
+                  <p className="text-xs text-slate-400">还有 {result.sections.length - 6} 个模块，请进入详情页查看。</p>
+                ) : null}
+              </div>
+            </section>
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold">执行注意</h3>
+              <div className="mt-3 grid gap-2">
+                {result.checklist.slice(0, 5).map((item, index) => (
+                  <div key={`${item}-${index}`} className="flex gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200">
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-teal-700" />
+                    <span className="break-words">{item}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </>
       ) : result ? (
         <>
           {result.warnings.length ? (
@@ -1467,6 +1551,7 @@ export default function Home() {
           if (event.type === "result") {
             setLastEventAt(getNowMs());
             finalResult = event.data;
+            writeCurrentAgentAnalysis(event.data);
             setAgentResult(event.data);
           }
           if (event.type === "error") {
