@@ -1034,7 +1034,7 @@ function AgentAnalysisWorkspace({
           )}
         </div>
 
-        {error ? (
+        {error && !actionSlot ? (
           <div className="mt-4 flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
             <span>{error}</span>
