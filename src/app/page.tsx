@@ -1492,7 +1492,7 @@ export default function Home() {
           />
           {leftRailCollapsed ? (
             <div className="sticky top-5 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
-              <div className="flex gap-2 lg:flex-col">
+              <div className="flex items-center justify-center gap-2 lg:flex-col">
                 <button
                   aria-label="展开生成配置"
                   className="grid size-11 place-items-center rounded-lg bg-slate-950 text-white transition hover:bg-slate-800"
@@ -1849,7 +1849,7 @@ export default function Home() {
           <div className="sticky top-5 space-y-3">
             {rightRailCollapsed ? (
               <div className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
-                <div className="flex gap-2 lg:flex-col">
+                <div className="flex items-center justify-center gap-2 lg:flex-col">
                   <button
                     aria-label="展开目录面板"
                     className="grid size-11 place-items-center rounded-lg bg-slate-950 text-white transition hover:bg-slate-800"
