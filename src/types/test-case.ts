@@ -16,7 +16,7 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export type RunStatus = "success" | "failed" | "cancelled";
 
-export type TestAgentType = "requirement-review" | "case-generator" | "release-risk";
+export type TestAgentType = "requirement-review" | "case-generator" | "release-risk" | "change-impact";
 
 export type TestAgentAnalysisType = Exclude<TestAgentType, "case-generator">;
 

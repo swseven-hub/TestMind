@@ -7,9 +7,9 @@ import type {
   TestPriority,
 } from "@/types/test-case";
 
-export const testAgentTypes: TestAgentType[] = ["requirement-review", "case-generator", "release-risk"];
+export const testAgentTypes: TestAgentType[] = ["requirement-review", "case-generator", "release-risk", "change-impact"];
 
-export const analysisAgentTypes: TestAgentAnalysisType[] = ["requirement-review", "release-risk"];
+export const analysisAgentTypes: TestAgentAnalysisType[] = ["requirement-review", "release-risk", "change-impact"];
 
 const priorityValues: TestPriority[] = ["P0", "P1", "P2"];
 
@@ -73,12 +73,13 @@ function normalizeList(value: unknown, limit: number) {
 }
 
 export function normalizeTestAgent(value: string): TestAgentType {
-  if (value === "requirement-review" || value === "release-risk" || value === "case-generator") return value;
+  if (value === "requirement-review" || value === "release-risk" || value === "case-generator" || value === "change-impact") return value;
   return "case-generator";
 }
 
 export function normalizeAnalysisAgent(value: string): TestAgentAnalysisType {
-  return value === "release-risk" ? "release-risk" : "requirement-review";
+  if (value === "release-risk" || value === "change-impact") return value;
+  return "requirement-review";
 }
 
 export function normalizeAgentAnalysisPayload(
@@ -91,8 +92,8 @@ export function normalizeAgentAnalysisPayload(
   const sections = Array.isArray(payload.sections)
     ? payload.sections.map(normalizeSection).filter((item): item is AgentAnalysisSection => item !== null)
     : [];
-  const fallbackTitle = agent === "requirement-review" ? "需求评审报告" : "发布风险报告";
-  const summary = cleanText(payload.summary) || (agent === "requirement-review" ? "已完成需求疑点、风险和测试关注点整理。" : "已完成发布风险、回归范围和上线检查整理。");
+  const fallbackTitle = agent === "requirement-review" ? "需求评审报告" : agent === "change-impact" ? "变更影响分析报告" : "发布风险报告";
+  const summary = cleanText(payload.summary) || (agent === "requirement-review" ? "已完成需求疑点、风险和测试关注点整理。" : agent === "change-impact" ? "已完成改动影响、风险和重点回归范围整理。" : "已完成发布风险、回归范围和上线检查整理。");
 
   return {
     agent,
@@ -131,7 +132,7 @@ function toItems(sentences: string[], category: string, priority: TestPriority) 
 function fallbackSections(agent: TestAgentAnalysisType, summary: string): AgentAnalysisSection[] {
   return [
     {
-      title: agent === "requirement-review" ? "需求评审" : "发布风险",
+      title: agent === "requirement-review" ? "需求评审" : agent === "change-impact" ? "变更影响" : "发布风险",
       items: [
         {
           title: "分析结果",
@@ -146,6 +147,53 @@ function fallbackSections(agent: TestAgentAnalysisType, summary: string): AgentA
 export function generateFallbackAgentAnalysis(agent: TestAgentAnalysisType, input: string): AgentAnalysisResponse {
   const sentences = splitSentences(input);
   const seed = sentences.length ? sentences : [cleanText(input) || "未提供足够内容。"];
+
+  if (agent === "change-impact") {
+    const changedFiles = input
+      .split(/\n+/)
+      .map((line) => line.match(/^(?:diff --git a\/|--- a\/|\+\+\+ b\/)([^\s]+)/)?.[1])
+      .filter((item): item is string => Boolean(item))
+      .map((item) => item.replace(/^b\//, ""))
+      .slice(0, 12);
+    const moduleCandidates = changedFiles.length ? changedFiles : pickBySignals(seed, ["src/", "app/", "api", "service", "controller", "route", "model", "schema", "config"], 6);
+    const risky = pickBySignals(seed, ["status", "state", "order", "payment", "refund", "coupon", "permission", "auth", "role", "token", "api", "database", "sql", "migration", "config", "cache", "callback", "webhook", "支付", "退款", "订单", "权限", "登录", "状态", "优惠券", "风控", "接口", "数据库", "配置"], 8);
+    const interfaceRisks = pickBySignals(seed, ["api", "route", "request", "response", "params", "schema", "dto", "controller", "fetch", "axios", "接口", "入参", "出参", "字段", "错误码"], 6);
+    const sections: AgentAnalysisSection[] = [
+      {
+        title: "改动影响模块",
+        description: "基于 diff/PR 文本识别的改动区域。",
+        items: toItems(moduleCandidates, "模块", "P1"),
+      },
+      {
+        title: "高风险影响",
+        description: "需要优先确认的业务风险和隐性影响。",
+        items: toItems(risky, "风险", "P0"),
+      },
+      {
+        title: "接口破坏风险",
+        description: "可能影响入参、出参、状态码、鉴权或兼容性的接口点。",
+        items: toItems(interfaceRisks, "接口", "P1"),
+      },
+      {
+        title: "发版建议",
+        items: [
+          { title: "建议补测后放行", detail: "当前仅基于 diff/PR 文本做静态语义判断，尚未接入历史缺陷和真实依赖图。", priority: "P1", category: "发版" },
+          { title: "历史事故待关联", detail: "未接入 PingCode 缺陷、线上事故或复盘记录时，无法确认真实历史相似事故。", priority: "P2", category: "历史" },
+        ],
+      },
+    ];
+
+    return {
+      agent,
+      source: "fallback",
+      title: "变更影响分析报告",
+      summary: `已基于 ${seed.length} 个变更片段整理影响模块、风险点、接口风险和回归建议。`,
+      sections,
+      checklist: ["确认改动文件对应的业务模块", "回归改动直接触达的主流程", "覆盖状态机/权限/金额/数据写入风险", "检查接口入参出参兼容性", "确认是否需要阻止或延后发版"],
+      nextActions: ["补充 PR 描述和关联需求编号", "补充历史缺陷或事故记录用于相似问题匹配", "将 P0 风险转成发版前必测清单"],
+      warnings: ["未检测到可用的模型 API Key，当前报告由本地规则生成；历史事故关联需要接入真实缺陷/事故数据。"],
+    };
+  }
 
   if (agent === "release-risk") {
     const scope = pickBySignals(seed, ["新增", "修改", "修复", "变更", "接口", "字段", "流程", "权限", "配置"], 6);
@@ -246,6 +294,28 @@ export function buildAgentPrompt(agent: TestAgentAnalysisType, input: string): A
 ${commonSchema}
 
 发布材料：
+${clippedInput}`,
+    };
+  }
+
+  if (agent === "change-impact") {
+    return {
+      maxTokens: 4_800,
+      system:
+        "你是资深测试架构师和发布质量负责人，专门根据 git diff、PR 描述、提交记录和代码改动判断业务影响范围、接口破坏风险、回归重点和是否应该阻止发版。输出中文、短句、可执行建议。",
+      user: `请分析下面 git diff / PR 材料，输出变更影响分析报告。要求：
+1. 不写泛泛而谈，必须基于输入中的文件路径、函数名、字段名、接口、配置、状态流转、数据库或业务词做判断。
+2. 必须包含：改动摘要、影响模块、可能受影响功能、高风险点、重点回归清单、可能被破坏的接口、历史相似问题、发版建议。
+3. 如果没有历史缺陷/事故材料，历史相似问题必须明确写“未接入历史数据，无法确认真实历史事故”，不能编造历史事故次数。
+4. 如果发现支付、退款、订单状态、登录、权限、风控、优惠券、数据迁移、接口兼容、缓存、消息/回调、金额、库存等信号，要提高优先级。
+5. priority 只能是 P0/P1/P2。P0 表示不验证可能造成线上事故、资损、权限泄露、主链路不可用或数据错误。
+6. checklist 输出发版前必测清单，按可执行动词写。
+7. nextActions 输出 3-8 条下一步动作，必须包含是否建议阻止发版或补测后放行。
+8. 发版建议只能使用这些明确措辞之一：建议放行、建议补测后放行、建议阻止发版。必须给理由。
+
+${commonSchema}
+
+git diff / PR 材料：
 ${clippedInput}`,
     };
   }

@@ -15,6 +15,7 @@ import {
   Eye,
   EyeOff,
   FileText,
+  GitPullRequest,
   History,
   KeyRound,
   ListChecks,
@@ -170,6 +171,15 @@ const agentOptions: Array<{
     icon: Zap,
     actionLabel: "分析发布风险",
     placeholder: "粘贴发布说明、需求变更、Bug 列表、接口变更或 Git diff。",
+  },
+  {
+    value: "change-impact",
+    label: "变更影响智能体",
+    shortLabel: "变更",
+    description: "分析 git diff / PR，判断影响范围、接口风险和回归重点。",
+    icon: GitPullRequest,
+    actionLabel: "分析变更影响",
+    placeholder: "粘贴 git diff、PR 描述、提交记录，或变更文件列表。可附上历史缺陷/事故摘要。",
   },
 ];
 
@@ -1573,6 +1583,26 @@ export default function Home() {
     setProgressLogs([firstLog]);
   }
 
+  function getAnalysisInputLabel() {
+    if (activeAgent === "change-impact") return "git diff / PR 材料";
+    return "发布材料";
+  }
+
+  function getAnalysisInputError() {
+    if (activeAgent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
+    return "请输入至少 20 个字符的发布材料。";
+  }
+
+  function getAgentRunningCopy() {
+    if (activeAgent === "requirement-review") {
+      return { title: "准备开始需求评审", floating: "AI 正在评审" };
+    }
+    if (activeAgent === "change-impact") {
+      return { title: "准备开始变更影响分析", floating: "AI 正在分析变更" };
+    }
+    return { title: "准备开始发布风险分析", floating: "AI 正在分析" };
+  }
+
   async function runAgentAnalysis() {
     if (!isAnalysisAgent(activeAgent)) {
       await generate();
@@ -1588,10 +1618,11 @@ export default function Home() {
 
     setIsAgentRunning(true);
     setAgentError("");
-    startProgress("AI 评审过程", activeAgent === "requirement-review" ? "AI 正在评审" : "AI 正在分析", {
+    const runningCopy = getAgentRunningCopy();
+    startProgress("AI 评审过程", runningCopy.floating, {
       id: "agent-start",
       type: "stage",
-      message: activeAgent === "requirement-review" ? "准备开始需求评审" : "准备开始发布风险分析",
+      message: runningCopy.title,
       detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
         provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
       }`,
@@ -1629,9 +1660,10 @@ export default function Home() {
       } else {
         const input = agentInput.trim();
         if (input.length < 20) {
-          setAgentError("请输入至少 20 个字符的发布材料。");
+          const inputError = getAnalysisInputError();
+          setAgentError(inputError);
           setProgressStatus("error");
-          setProgressError("请输入至少 20 个字符的发布材料。");
+          setProgressError(inputError);
           setRunCompletedAt(getNowMs());
           setIsAgentRunning(false);
           return;
@@ -2118,7 +2150,7 @@ export default function Home() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  {activeAgent === "release-risk" ? "文本" : "PDF"}
+                  {activeAgent === "requirement-review" || activeAgent === "case-generator" ? "PDF" : "文本"}
                 </span>
                 <button
                   aria-label="收起生成配置"
@@ -2153,7 +2185,7 @@ export default function Home() {
               />
             ) : (
               <label className="mt-4 block">
-                <span className="text-xs font-medium text-slate-500">发布材料</span>
+                <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
                 <textarea
                   className="mt-1 min-h-64 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
                   placeholder={currentAgentOption.placeholder}

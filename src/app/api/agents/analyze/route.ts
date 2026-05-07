@@ -222,7 +222,7 @@ export async function POST(request: Request) {
         return NextResponse.json({ message: "未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。" }, { status: 422 });
       }
     } else if (input.length < 20) {
-      return NextResponse.json({ message: "请输入至少 20 个字符的发布材料。" }, { status: 400 });
+      return NextResponse.json({ message: agent === "change-impact" ? "请输入至少 20 个字符的 git diff 或 PR 材料。" : "请输入至少 20 个字符的发布材料。" }, { status: 400 });
     }
 
     if (input.length > 80_000) {

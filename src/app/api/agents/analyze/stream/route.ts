@@ -236,7 +236,12 @@ async function streamAnalyzeWithModel({
         onEvent({
           type: "thinking",
           message: "模型正在思考",
-          detail: agent === "requirement-review" ? "正在识别需求疑点、边界、异常和权限风险。" : "正在判断回归范围、冒烟清单和上线风险。",
+          detail:
+            agent === "requirement-review"
+              ? "正在识别需求疑点、边界、异常和权限风险。"
+              : agent === "change-impact"
+                ? "正在识别改动影响、接口风险和重点回归范围。"
+                : "正在判断回归范围、冒烟清单和上线风险。",
         });
       }
     }
@@ -297,10 +302,10 @@ export async function POST(request: Request) {
               detail: `提取 ${input.length.toLocaleString("zh-CN")} 个字符，准备进入需求评审。`,
             });
           } else {
-            if (input.length < 20) throw new Error("请输入至少 20 个字符的发布材料。");
+            if (input.length < 20) throw new Error(agent === "change-impact" ? "请输入至少 20 个字符的 git diff 或 PR 材料。" : "请输入至少 20 个字符的发布材料。");
             onEvent({
               type: "stage",
-              message: "已读取发布材料",
+              message: agent === "change-impact" ? "已读取 git diff / PR 材料" : "已读取发布材料",
               detail: `共 ${input.length.toLocaleString("zh-CN")} 个字符。`,
             });
           }
@@ -335,7 +340,7 @@ export async function POST(request: Request) {
           } else {
             onEvent({
               type: "stage",
-              message: agent === "requirement-review" ? "AI 正在评审需求" : "AI 正在分析发布风险",
+              message: agent === "requirement-review" ? "AI 正在评审需求" : agent === "change-impact" ? "AI 正在分析变更影响" : "AI 正在分析发布风险",
               detail: "模型会流式返回结构化 JSON，可在右侧查看实时输出。",
             });
             result = await streamAnalyzeWithModel({
