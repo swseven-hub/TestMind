@@ -775,6 +775,7 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
 }
 
 function PdfUploadDropzone({
+  compact = false,
   emptyLabel,
   file,
   isDragging,
@@ -782,6 +783,7 @@ function PdfUploadDropzone({
   onDragChange,
   onPick,
 }: {
+  compact?: boolean;
   emptyLabel: string;
   file: File | null;
   isDragging: boolean;
@@ -792,7 +794,8 @@ function PdfUploadDropzone({
   return (
     <div
       className={clsx(
-        "group mt-4 grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
+        "group cursor-pointer rounded-lg border border-dashed transition",
+        compact ? "mt-3 flex min-h-20 items-center justify-between gap-3 p-3 text-left" : "mt-4 grid min-h-44 place-items-center p-5 text-center",
         isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
       )}
       onClick={onClick}
@@ -807,15 +810,16 @@ function PdfUploadDropzone({
         onPick(event.dataTransfer.files[0]);
       }}
     >
-      <div className="space-y-4">
-        <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
-          <UploadCloud className="size-6" />
+      <div className={clsx("min-w-0", compact ? "flex flex-1 items-center gap-3" : "space-y-4")}>
+        <div className={clsx("grid shrink-0 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5", compact ? "size-10" : "mx-auto size-12")}>
+          <UploadCloud className={compact ? "size-5" : "size-6"} />
         </div>
-        <div>
-          <p className="break-words font-semibold">{file ? file.name : emptyLabel}</p>
-          <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
+        <div className="min-w-0">
+          <p className={clsx("break-words font-semibold", compact && "truncate")}>{file ? file.name : emptyLabel}</p>
+          <p className="mt-0.5 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
         </div>
       </div>
+      {compact ? <span className="shrink-0 rounded-lg bg-white px-3 py-2 text-xs font-medium text-slate-600 ring-1 ring-slate-200">选择文件</span> : null}
     </div>
   );
 }
@@ -896,7 +900,7 @@ function AgentRail({
   onToggle: () => void;
 }) {
   return (
-    <nav className="sticky top-0 flex min-h-[calc(100vh-73px)] flex-col bg-white">
+    <nav className="flex h-full min-h-0 flex-col bg-white">
       <div className={clsx("flex h-14 shrink-0 items-center border-b border-slate-200 px-3", collapsed ? "justify-center" : "justify-between gap-3")}>
         {collapsed ? null : (
           <div className="min-w-0">
@@ -1004,14 +1008,14 @@ function AgentAnalysisWorkspace({
 
   return (
     <>
-      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-        <div className={clsx("grid gap-5", actionSlot ? "xl:grid-cols-[minmax(0,1fr)_420px] xl:items-start" : "xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center")}>
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <div className={clsx("grid gap-4", actionSlot ? "xl:grid-cols-[minmax(0,1fr)_380px] xl:items-start" : "xl:grid-cols-[minmax(0,1fr)_auto] xl:items-center")}>
           <div className="min-w-0">
             <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
               <Icon className="size-4" />
               {agent.label}
             </div>
-            <h2 className="mt-2 text-2xl font-semibold tracking-normal">{result?.title ?? "等待智能体分析"}</h2>
+            <h2 className="mt-1 text-xl font-semibold tracking-normal">{result?.title ?? "等待智能体分析"}</h2>
             <p className="mt-1 break-words text-sm leading-6 text-slate-500">{result?.summary ?? agent.description}</p>
           </div>
           {actionSlot ? (
@@ -1039,7 +1043,7 @@ function AgentAnalysisWorkspace({
       </div>
 
       {isRunning ? (
-        <div className="grid min-h-[360px] place-items-center rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
+        <div className="grid min-h-[220px] place-items-center rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
           <div>
             <Loader2 className="mx-auto size-8 animate-spin text-teal-700" />
             <p className="mt-4 font-semibold text-slate-800">智能体分析中</p>
@@ -1162,13 +1166,13 @@ function AgentAnalysisWorkspace({
           </div>
         </>
       ) : (
-        <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
-          <div className="w-full max-w-xl">
-            <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
-              <Icon className="size-7" />
+        <div className="grid min-h-[240px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
+          <div className="w-full max-w-lg">
+            <div className="mx-auto grid size-11 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
+              <Icon className="size-5" />
             </div>
-            <p className="mt-4 text-lg font-semibold text-slate-800">{agent.label}</p>
-            <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">{agent.description}</p>
+            <p className="mt-3 font-semibold text-slate-800">结果区等待分析</p>
+            <p className="mx-auto mt-1 max-w-lg text-sm leading-6 text-slate-500">上传材料并运行后，这里会展示概览和分析结果。</p>
           </div>
         </div>
       )}
@@ -1702,8 +1706,8 @@ export default function Home() {
 
   function renderExecutionPanel(embedded = false) {
     return (
-      <div className={clsx(embedded ? "rounded-lg bg-slate-50 p-4 ring-1 ring-slate-200" : "rounded-lg border border-slate-200 bg-white p-4 shadow-sm")}>
-        <div className="mb-4 flex items-center justify-between gap-3">
+      <div className={clsx(embedded ? "rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200" : "rounded-lg border border-slate-200 bg-white p-3 shadow-sm")}>
+        <div className="flex items-center justify-between gap-3">
           <div>
             <h2 className="text-base font-semibold text-slate-900">执行面板</h2>
             <p className="mt-0.5 text-xs text-slate-500">{currentAgentOption.label}</p>
@@ -1713,6 +1717,7 @@ export default function Home() {
 
         {reviewMode ? (
           <PdfUploadDropzone
+            compact
             emptyLabel="上传 PRD PDF"
             file={reviewFile}
             isDragging={isReviewDragging}
@@ -1722,6 +1727,7 @@ export default function Home() {
           />
         ) : !analysisMode ? (
           <PdfUploadDropzone
+            compact
             emptyLabel="上传 PRD PDF"
             file={file}
             isDragging={isDragging}
@@ -1730,12 +1736,12 @@ export default function Home() {
             onPick={pickFile}
           />
         ) : (
-          <div className="mt-4 space-y-3">
+          <div className="mt-3 space-y-2">
             {activeAgent !== "debug-assistant" ? (
               <label className="block">
                 <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
                 <textarea
-                  className="mt-1 min-h-52 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500"
+                  className="mt-1 min-h-28 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none transition focus:border-teal-500"
                   placeholder={currentAgentOption.placeholder}
                   value={agentInput}
                   onChange={(event) => {
@@ -1765,7 +1771,7 @@ export default function Home() {
         )}
 
         <button
-          className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+          className="mt-3 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
           disabled={!isClientReady || (analysisMode && isAgentRunning)}
           onClick={analysisMode ? runAgentAnalysis : generate}
         >
@@ -1774,7 +1780,7 @@ export default function Home() {
         </button>
 
         {(analysisMode ? agentError : error) ? (
-          <div className="mt-4 flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+          <div className="mt-3 flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
             <AlertCircle className="mt-0.5 size-4 shrink-0" />
             <span>{analysisMode ? agentError : error}</span>
           </div>
@@ -1784,7 +1790,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f8fb] text-slate-950">
+    <main className="h-screen overflow-hidden bg-[#f6f8fb] text-slate-950">
       <GenerationProgressModal
         elapsedMs={elapsedMs}
         error={progressError}
@@ -1814,8 +1820,9 @@ export default function Home() {
         </button>
       ) : null}
 
-      <section className="border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
+      <div className="flex h-full min-h-0 w-full flex-col">
+      <section className="shrink-0 border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
+        <div className="flex h-[72px] flex-col gap-3 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
               <Bot className="size-5" />
@@ -1888,7 +1895,7 @@ export default function Home() {
         onChange={(event) => addAgentFiles(event.target.files, "reference")}
       />
 
-      <section className={clsx("grid min-h-[calc(100vh-73px)] grid-cols-1 transition-[grid-template-columns]", workspaceGridClass)}>
+      <section className={clsx("grid min-h-0 flex-1 grid-cols-1 transition-[grid-template-columns]", workspaceGridClass)}>
         <aside className="min-w-0 border-r border-slate-200 bg-white">
           <AgentRail
             collapsed={leftRailCollapsed}
@@ -1898,7 +1905,7 @@ export default function Home() {
           />
         </aside>
 
-        <section id="case-results" className="min-w-0 space-y-4 px-5 py-5 sm:px-8">
+        <section id="case-results" className="min-w-0 space-y-3 overflow-y-auto px-3 py-3 sm:px-4">
           {analysisMode ? (
             <AgentAnalysisWorkspace actionSlot={renderExecutionPanel(true)} activeAgent={activeAgent} error={agentError} isRunning={isAgentRunning} result={agentResult} />
           ) : (
@@ -1974,16 +1981,16 @@ export default function Home() {
                   <CoverageBlueprintPanel activeModule={activeModule} result={result} />
                 </>
               ) : (
-                <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+                <div className="grid min-h-[240px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
                   <div className="w-full max-w-2xl">
-                    <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
-                      <FileText className="size-7" />
+                    <div className="mx-auto grid size-11 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
+                      <FileText className="size-5" />
                     </div>
-                    <p className="mt-4 text-lg font-semibold text-slate-800">还没有生成测试用例</p>
+                    <p className="mt-3 font-semibold text-slate-800">还没有生成测试用例</p>
                     <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
                       在执行面板上传 PRD 后开始生成；也可以先加载演示案例，快速查看报告概览、覆盖蓝图和详情页效果。
                     </p>
-                    <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
+                    <div className="mt-4 grid gap-3 text-left sm:grid-cols-3">
                       {[
                         { icon: UploadCloud, title: "上传 PRD", desc: file ? "已选择文档" : "支持 PDF 文本层" },
                         { icon: KeyRound, title: "全局模型", desc: "在设置页统一维护" },
@@ -2000,7 +2007,7 @@ export default function Home() {
                       })}
                     </div>
                     <button
-                      className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                      className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
                       type="button"
                       onClick={loadDemoCase}
                     >
@@ -2014,6 +2021,7 @@ export default function Home() {
           )}
         </section>
       </section>
+      </div>
     </main>
   );
 }
