@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 
 import type { Provider } from "@/lib/model-config";
 import type { CaseReviewStatus } from "@/lib/case-review";
-import type { GenerateResponse, GenerationUsage, RunStatus, ThinkingMode } from "@/types/test-case";
+import type { GenerateResponse, GenerationUsage, RunStatus, TestCase, ThinkingMode } from "@/types/test-case";
 
 export type RunHistoryProvider = Provider;
 
@@ -114,7 +114,8 @@ export async function updateRunHistoryCaseStatuses(
   caseUpdates: Array<{
     caseId: string;
     module: string;
-    status: CaseReviewStatus;
+    status?: CaseReviewStatus;
+    patch?: Partial<TestCase>;
   }>,
 ) {
   const response = await fetch("/api/run-history", {

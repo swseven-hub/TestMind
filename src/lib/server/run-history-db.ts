@@ -2,7 +2,7 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { GenerateResponse, GenerationUsage, RunStatus, ThinkingMode } from "@/types/test-case";
+import type { GenerateResponse, GenerationUsage, RunStatus, TestCase, ThinkingMode } from "@/types/test-case";
 import type { Provider } from "@/lib/model-config";
 import type { CaseReviewStatus } from "@/lib/case-review";
 
@@ -258,7 +258,8 @@ export function updateRunHistoryCaseStatuses(
   updates: Array<{
     caseId: string;
     module: string;
-    status: CaseReviewStatus;
+    status?: CaseReviewStatus;
+    patch?: Partial<TestCase>;
   }>,
 ) {
   if (!updates.length) return null;
@@ -273,7 +274,8 @@ export function updateRunHistoryCaseStatuses(
   for (const update of updates) {
     const item = result.cases.find((candidate) => candidate.id === update.caseId && candidate.module === update.module);
     if (!item) continue;
-    item.status = update.status;
+    if (update.patch) Object.assign(item, update.patch);
+    if (update.status) item.status = update.status;
     updatedCount += 1;
   }
 

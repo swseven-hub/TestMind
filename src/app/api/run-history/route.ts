@@ -3,7 +3,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { clearRunHistoryRecords, deleteRunHistoryRecord, listRunHistoryRecords, saveRunHistoryRecord, updateRunHistoryCaseStatuses } from "@/lib/server/run-history-db";
 import { normalizeCaseReviewStatus } from "@/lib/case-review";
 import { normalizeProvider, normalizeThinkingMode } from "@/lib/model-config";
-import type { GenerateResponse, RunStatus } from "@/types/test-case";
+import type { GenerateResponse, RunStatus, TestCase, TestCategory, TestPriority } from "@/types/test-case";
 
 export const runtime = "nodejs";
 
@@ -27,7 +27,48 @@ type IncomingCaseStatusUpdate = {
   caseId?: string;
   module?: string;
   status?: string;
+  patch?: Partial<TestCase>;
 };
+
+const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
+const priorities: TestPriority[] = ["P0", "P1", "P2"];
+
+function normalizeString(value: unknown) {
+  return typeof value === "string" ? value.trim() : "";
+}
+
+function normalizeStringArray(value: unknown) {
+  if (!Array.isArray(value)) return [];
+  return value.map((item) => normalizeString(item)).filter(Boolean);
+}
+
+function normalizeCasePatch(value: unknown): Partial<TestCase> | undefined {
+  const patch = value as Partial<TestCase> | undefined;
+  if (!patch || typeof patch !== "object") return undefined;
+
+  const normalized: Partial<TestCase> = {};
+  const title = normalizeString(patch.title);
+  const moduleName = normalizeString(patch.module);
+  const preconditions = normalizeString(patch.preconditions);
+  const expectedResult = normalizeString(patch.expectedResult);
+  const testPoint = normalizeString(patch.testPoint);
+  const evidence = normalizeString(patch.evidence);
+  const steps = normalizeStringArray(patch.steps);
+  const expectedResults = normalizeStringArray(patch.expectedResults);
+
+  if (title) normalized.title = title;
+  if (moduleName) normalized.module = moduleName;
+  if (categories.includes(patch.category as TestCategory)) normalized.category = patch.category as TestCategory;
+  if (priorities.includes(patch.priority as TestPriority)) normalized.priority = patch.priority as TestPriority;
+  normalized.preconditions = preconditions;
+  normalized.steps = steps;
+  normalized.expectedResult = expectedResult;
+  normalized.expectedResults = expectedResults.length ? expectedResults : expectedResult ? [expectedResult] : [];
+  normalized.testPoint = testPoint;
+  normalized.evidence = evidence;
+
+  return normalized;
+}
 
 function normalizeIncomingRecord(record: IncomingRecord) {
   if (!record.result || !Array.isArray(record.result.cases)) return null;
@@ -77,7 +118,8 @@ export async function PATCH(request: NextRequest) {
     .map((item) => ({
       caseId: item.caseId as string,
       module: item.module as string,
-      status: normalizeCaseReviewStatus(item.status),
+      ...(item.status === undefined ? {} : { status: normalizeCaseReviewStatus(item.status) }),
+      patch: normalizeCasePatch(item.patch),
     }));
 
   if (!caseUpdates.length) return NextResponse.json({ message: "用例状态更新内容无效。" }, { status: 400 });

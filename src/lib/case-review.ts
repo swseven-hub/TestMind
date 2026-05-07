@@ -45,6 +45,20 @@ function matchesTestPoint(item: TestCase, testPointId: string, testPointName: st
   return item.testPointId === testPointId || item.testPoint?.includes(testPointName) || item.title.includes(testPointName);
 }
 
+function normalizeModuleForMatch(value: string) {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function resolveModuleName(blueprintModuleName: string, caseModuleNames: string[]) {
+  if (caseModuleNames.includes(blueprintModuleName)) return blueprintModuleName;
+
+  const normalizedBlueprintName = normalizeModuleForMatch(blueprintModuleName);
+  return caseModuleNames.find((moduleName) => {
+    const normalizedModuleName = normalizeModuleForMatch(moduleName);
+    return normalizedModuleName.includes(normalizedBlueprintName) || normalizedBlueprintName.includes(normalizedModuleName);
+  });
+}
+
 function pushIssue(issues: CoverageReviewIssue[], issue: CoverageReviewIssue) {
   if (!issues.some((item) => item.id === issue.id)) issues.push(issue);
 }
@@ -66,6 +80,7 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
   }
 
   const blueprint = result.coverageBlueprint;
+  const caseModuleNames = [...new Set(cases.map((item) => item.module))];
   const overallCounts = countByCategory(cases);
   for (const category of testCategories) {
     if (!overallCounts[category]) {
@@ -118,14 +133,15 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
   }
 
   for (const blueprintModule of blueprint.modules) {
-    const moduleCases = cases.filter((item) => item.module === blueprintModule.name);
+    const resolvedModuleName = resolveModuleName(blueprintModule.name, caseModuleNames);
+    const displayModuleName = resolvedModuleName ?? blueprintModule.name;
+    const moduleCases = resolvedModuleName ? cases.filter((item) => item.module === resolvedModuleName) : [];
     if (!moduleCases.length) {
       pushIssue(issues, {
         id: `module-${blueprintModule.name}-empty`,
         severity: "high",
         title: "蓝图模块没有生成用例",
         detail: `${blueprintModule.name} 在覆盖蓝图中存在，但最终结果里没有对应测试用例。`,
-        moduleName: blueprintModule.name,
       });
       continue;
     }
@@ -139,8 +155,8 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
           id: `module-${blueprintModule.name}-missing-${category}`,
           severity: blueprintModule.isCore || target >= 3 ? "high" : "medium",
           title: `${category}类覆盖缺失`,
-          detail: `${blueprintModule.name} 蓝图计划 ${target} 条${category}类用例，但最终没有生成对应用例。`,
-          moduleName: blueprintModule.name,
+          detail: `${displayModuleName} 蓝图计划 ${target} 条${category}类用例，但最终没有生成对应用例。`,
+          moduleName: displayModuleName,
           category,
         });
       } else if (target >= 4 && actual < Math.ceil(target * 0.5)) {
@@ -148,8 +164,8 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
           id: `module-${blueprintModule.name}-thin-${category}`,
           severity: "medium",
           title: `${category}类覆盖偏少`,
-          detail: `${blueprintModule.name} 蓝图计划 ${target} 条${category}类用例，当前只有 ${actual} 条，建议补充关键路径。`,
-          moduleName: blueprintModule.name,
+          detail: `${displayModuleName} 蓝图计划 ${target} 条${category}类用例，当前只有 ${actual} 条，建议补充关键路径。`,
+          moduleName: displayModuleName,
           category,
         });
       }
@@ -160,8 +176,8 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
         id: `module-${blueprintModule.name}-risk-no-exception`,
         severity: "medium",
         title: "高风险模块缺少异常路径",
-        detail: `${blueprintModule.name} 风险等级为 ${blueprintModule.riskLevel}，但没有异常类用例，建议补充失败、超时、非法状态或依赖不可用场景。`,
-        moduleName: blueprintModule.name,
+        detail: `${displayModuleName} 风险等级为 ${blueprintModule.riskLevel}，但没有异常类用例，建议补充失败、超时、非法状态或依赖不可用场景。`,
+        moduleName: displayModuleName,
         category: "异常",
       });
     }
@@ -174,16 +190,16 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
           id: `testpoint-${blueprintModule.name}-${testPoint.id}-empty`,
           severity: testPoint.riskLevel === "high" || testPoint.riskLevel === "critical" ? "high" : "medium",
           title: "测试点没有对应用例",
-          detail: `${blueprintModule.name} 的“${testPoint.name}”计划约 ${testPoint.expectedCaseCount} 条，但未匹配到对应用例。`,
-          moduleName: blueprintModule.name,
+          detail: `${displayModuleName} 的“${testPoint.name}”计划约 ${testPoint.expectedCaseCount} 条，但未匹配到对应用例。`,
+          moduleName: displayModuleName,
         });
       } else if (testPoint.expectedCaseCount >= 4 && actual < Math.ceil(testPoint.expectedCaseCount * 0.5)) {
         pushIssue(issues, {
           id: `testpoint-${blueprintModule.name}-${testPoint.id}-thin`,
           severity: "medium",
           title: "测试点覆盖偏少",
-          detail: `${blueprintModule.name} 的“${testPoint.name}”计划约 ${testPoint.expectedCaseCount} 条，当前匹配 ${actual} 条。`,
-          moduleName: blueprintModule.name,
+          detail: `${displayModuleName} 的“${testPoint.name}”计划约 ${testPoint.expectedCaseCount} 条，当前匹配 ${actual} 条。`,
+          moduleName: displayModuleName,
         });
       }
     }
@@ -193,8 +209,8 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
         id: `module-${blueprintModule.name}-note-${note}`,
         severity: "info",
         title: "蓝图覆盖备注",
-        detail: `${blueprintModule.name}：${note}`,
-        moduleName: blueprintModule.name,
+        detail: `${displayModuleName}：${note}`,
+        moduleName: displayModuleName,
       });
     }
   }

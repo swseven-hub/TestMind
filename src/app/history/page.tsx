@@ -21,9 +21,12 @@ import {
   PanelLeftOpen,
   PanelRightClose,
   PanelRightOpen,
+  Pencil,
+  Save,
   Search,
   Shield,
   Trash2,
+  X,
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
@@ -33,7 +36,7 @@ import { buildCoverageReview, caseReviewStatuses, getCaseIdentity, getCaseReview
 import { providerLabels, reasoningEffortLabels, thinkingModeLabels } from "@/lib/model-config";
 import { clearRunHistory, formatDuration, formatRunTime, formatTokens, removeRunHistoryRecord, updateRunHistoryCaseStatuses, useRunHistory, type RunHistoryRecord } from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
-import type { RunStatus, TestCase, TestCategory } from "@/types/test-case";
+import type { RunStatus, TestCase, TestCategory, TestPriority } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
 
@@ -85,6 +88,7 @@ const coverageSeverityLabels: Record<CoverageReviewIssue["severity"], string> = 
 };
 
 const historyUiStorageKeys = {
+  coverageReviewOpen: "testmind.history.coverageReviewOpen.v1",
   leftRailCollapsed: "testmind.history.leftRailCollapsed.v1",
   rightRailCollapsed: "testmind.history.rightRailCollapsed.v1",
   summaryOpen: "testmind.history.summaryOpen.v1",
@@ -93,6 +97,7 @@ const historyUiStorageKeys = {
 const historyUiChangeEvent = "testmind.history-ui-change";
 
 const pageSizeOptions = [25, 50, 100];
+const priorityOptions: TestPriority[] = ["P0", "P1", "P2"];
 
 const moduleHeaderStyles = [
   "border-sky-200 bg-sky-50 text-sky-950",
@@ -156,6 +161,24 @@ function groupCases(cases: TestCase[]) {
 function getModuleDurationLabel(record: RunHistoryRecord | null, moduleName: string) {
   const moduleStat = record?.result.stats?.modules.find((item) => item.name === moduleName);
   return moduleStat?.durationMs ? ` · ${formatDuration(moduleStat.durationMs)}` : "";
+}
+
+function getModuleSectionId(moduleName: string) {
+  return `history-module-${encodeURIComponent(moduleName)}`;
+}
+
+function normalizeModuleForMatch(value: string) {
+  return value.toLowerCase().replace(/[^\p{L}\p{N}]+/gu, "");
+}
+
+function findBestModuleName(moduleName: string, moduleNames: string[]) {
+  if (moduleNames.includes(moduleName)) return moduleName;
+
+  const normalizedTarget = normalizeModuleForMatch(moduleName);
+  return moduleNames.find((item) => {
+    const normalizedItem = normalizeModuleForMatch(item);
+    return normalizedItem.includes(normalizedTarget) || normalizedTarget.includes(normalizedItem);
+  });
 }
 
 function PaginationControls({
@@ -244,12 +267,18 @@ function createExportResult(record: RunHistoryRecord, cases: TestCase[], suffix:
   };
 }
 
+type EditableCasePatch = Pick<TestCase, "category" | "expectedResult" | "expectedResults" | "evidence" | "module" | "preconditions" | "priority" | "steps" | "testPoint" | "title">;
+
 function CoverageReviewPanel({
   issues,
+  open,
   onSelectModule,
+  onToggle,
 }: {
   issues: CoverageReviewIssue[];
+  open: boolean;
   onSelectModule: (moduleName: string) => void;
+  onToggle: () => void;
 }) {
   const highCount = issues.filter((item) => item.severity === "high").length;
   const mediumCount = issues.filter((item) => item.severity === "medium").length;
@@ -257,8 +286,13 @@ function CoverageReviewPanel({
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
-        <div className="min-w-0">
+      <button
+        aria-expanded={open}
+        className="flex w-full flex-col gap-3 text-left lg:flex-row lg:items-start lg:justify-between"
+        type="button"
+        onClick={onToggle}
+      >
+        <span className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
             <ClipboardCheck className="size-4 text-teal-700" />
             <h2 className="font-semibold">覆盖审查</h2>
@@ -266,17 +300,20 @@ function CoverageReviewPanel({
               {issues.length ? `${issues.length} 个发现` : "暂未发现明显缺口"}
             </span>
           </div>
-          <p className="mt-1 text-sm leading-6 text-slate-500">
-            基于覆盖蓝图和最终用例自动检查模块、测试类型、测试点的缺口，先帮你找最可能漏测的地方。
-          </p>
-        </div>
-        <div className="flex shrink-0 flex-wrap gap-2">
+          {open ? (
+            <p className="mt-1 text-sm leading-6 text-slate-500">
+              基于覆盖蓝图和最终用例自动检查模块、测试类型、测试点的缺口，先帮你找最可能漏测的地方。
+            </p>
+          ) : null}
+        </span>
+        <span className="flex shrink-0 flex-wrap items-center gap-2">
           <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200">高风险 {highCount}</span>
           <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200">需关注 {mediumCount}</span>
-        </div>
-      </div>
+          <ChevronDown className={clsx("size-5 text-slate-500 transition", open && "rotate-180")} />
+        </span>
+      </button>
 
-      {visibleIssues.length ? (
+      {open && visibleIssues.length ? (
         <div className="mt-4 grid gap-2">
           {visibleIssues.map((issue) => (
             <div key={issue.id} className={clsx("rounded-lg border px-3 py-2", coverageSeverityStyles[issue.severity])}>
@@ -304,9 +341,11 @@ function CoverageReviewPanel({
           ))}
         </div>
       ) : (
+        open ? (
         <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-800">
           当前结果与覆盖蓝图的模块、类型和测试点目标基本匹配，后续可以进入人工确认和定稿导出。
         </div>
+        ) : null
       )}
     </section>
   );
@@ -319,11 +358,13 @@ export default function HistoryPage() {
   const [activeReviewStatus, setActiveReviewStatus] = useState<CaseReviewStatus | "全部">("全部");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
+  const [coverageReviewOpen, setCoverageReviewOpen] = useStoredBoolean(historyUiStorageKeys.coverageReviewOpen, true);
   const [leftRailCollapsed, setLeftRailCollapsed] = useStoredBoolean(historyUiStorageKeys.leftRailCollapsed, false);
   const [rightRailCollapsed, setRightRailCollapsed] = useStoredBoolean(historyUiStorageKeys.rightRailCollapsed, false);
   const [summaryOpen, setSummaryOpen] = useStoredBoolean(historyUiStorageKeys.summaryOpen, true);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [updatingStatusKey, setUpdatingStatusKey] = useState("");
+  const [updatingCaseKey, setUpdatingCaseKey] = useState("");
   const [bulkUpdatingStatus, setBulkUpdatingStatus] = useState<CaseReviewStatus | "">("");
   const [error, setError] = useState("");
   const selectedRecord = history.find((record) => record.id === activeId) ?? history[0] ?? null;
@@ -400,6 +441,21 @@ export default function HistoryPage() {
     }
   }
 
+  async function updateCaseContent(item: TestCase, patch: EditableCasePatch) {
+    if (!selectedRecord) return;
+
+    const caseKey = getCaseIdentity(item);
+    setUpdatingCaseKey(caseKey);
+    setError("");
+    try {
+      await updateRunHistoryCaseStatuses(selectedRecord.id, [{ caseId: item.id, module: item.module, patch }]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "更新用例内容失败。");
+    } finally {
+      setUpdatingCaseKey("");
+    }
+  }
+
   async function bulkUpdateVisibleStatus(status: CaseReviewStatus) {
     if (!selectedRecord || !visibleCases.length) return;
 
@@ -454,11 +510,13 @@ export default function HistoryPage() {
   }
 
   function selectModule(moduleName: string) {
+    setActiveReviewStatus("全部");
     setActiveModule(moduleName);
     setCurrentPage(1);
     window.setTimeout(() => {
-      document.getElementById("history-case-list")?.scrollIntoView({ behavior: "smooth", block: "start" });
-    }, 0);
+      const targetElement = moduleName === "全部" ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(moduleName));
+      targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 80);
   }
 
   function changePageSize(nextPageSize: number) {
@@ -472,8 +530,7 @@ export default function HistoryPage() {
   }
 
   function focusCoverageModule(moduleName: string) {
-    setActiveReviewStatus("全部");
-    selectModule(moduleName);
+    selectModule(findBestModuleName(moduleName, moduleNames) ?? "全部");
   }
 
   return (
@@ -807,7 +864,12 @@ export default function HistoryPage() {
                 ) : null}
               </div>
 
-              <CoverageReviewPanel issues={coverageIssues} onSelectModule={focusCoverageModule} />
+              <CoverageReviewPanel
+                issues={coverageIssues}
+                open={coverageReviewOpen}
+                onSelectModule={focusCoverageModule}
+                onToggle={() => setCoverageReviewOpen(!coverageReviewOpen)}
+              />
 
               {visibleCases.length ? (
                 <PaginationControls
@@ -830,7 +892,7 @@ export default function HistoryPage() {
                     const moduleStyleIndex = moduleNames.indexOf(group.moduleName);
                     const moduleHeaderStyle = moduleHeaderStyles[(moduleStyleIndex >= 0 ? moduleStyleIndex : groupIndex) % moduleHeaderStyles.length];
                     return (
-                      <section key={`${group.moduleName}-${groupIndex}`} className="space-y-3">
+                      <section id={getModuleSectionId(group.moduleName)} key={`${group.moduleName}-${groupIndex}`} className="scroll-mt-5 space-y-3">
                         <div
                           className={clsx(
                             "flex flex-wrap items-center justify-between gap-3 rounded-lg border px-5 py-4 shadow-sm",
@@ -858,7 +920,9 @@ export default function HistoryPage() {
                             <HistoryCaseCard
                               key={`${group.moduleName}-${item.id}-${caseIndex}`}
                               item={item}
+                              saving={updatingCaseKey === getCaseIdentity(item)}
                               updating={updatingStatusKey === getCaseIdentity(item)}
+                              onSave={updateCaseContent}
                               onStatusChange={updateCaseStatus}
                             />
                           ))}
@@ -901,7 +965,7 @@ export default function HistoryPage() {
         </section>
 
         <aside className="min-w-0">
-          <div className="sticky top-5 space-y-3">
+          <div className="sticky top-5 max-h-[calc(100vh-2.5rem)] space-y-3 overflow-y-auto pr-1">
             {rightRailCollapsed ? (
               <div className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
                 <div className="flex items-center justify-center gap-2 lg:flex-col">
@@ -968,7 +1032,7 @@ export default function HistoryPage() {
                       </button>
                     ) : null}
                   </div>
-                  <div className="mt-3 grid max-h-[62vh] gap-1.5 overflow-y-auto pr-1">
+                  <div className="mt-3 grid max-h-[42vh] gap-1.5 overflow-y-auto pr-1">
                     <button
                       aria-pressed={currentModule === "全部"}
                       className={clsx(
@@ -1087,16 +1151,71 @@ export default function HistoryPage() {
 
 function HistoryCaseCard({
   item,
+  saving,
   updating,
+  onSave,
   onStatusChange,
 }: {
   item: TestCase;
+  saving: boolean;
   updating: boolean;
+  onSave: (item: TestCase, patch: EditableCasePatch) => Promise<void>;
   onStatusChange: (item: TestCase, status: CaseReviewStatus) => void;
 }) {
   const Icon = categoryIcons[item.category];
   const template = getTemplateCaseFields(item);
   const reviewStatus = getCaseReviewStatus(item);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState({
+    category: item.category,
+    evidence: item.evidence ?? "",
+    expectedResultsText: template.expectedResults,
+    module: item.module,
+    preconditions: item.preconditions,
+    priority: item.priority,
+    stepsText: item.steps.join("\n"),
+    testPoint: item.testPoint ?? "",
+    title: item.title,
+  });
+
+  function startEditing() {
+    setDraft({
+      category: item.category,
+      evidence: item.evidence ?? "",
+      expectedResultsText: template.expectedResults,
+      module: item.module,
+      preconditions: item.preconditions,
+      priority: item.priority,
+      stepsText: item.steps.join("\n"),
+      testPoint: item.testPoint ?? "",
+      title: item.title,
+    });
+    setEditing(true);
+  }
+
+  async function saveDraft() {
+    const steps = draft.stepsText
+      .split("\n")
+      .map((line) => line.trim())
+      .filter(Boolean);
+    const expectedResults = draft.expectedResultsText
+      .split("\n")
+      .map((line) => line.replace(/^\d+\.\s*/, "").trim())
+      .filter(Boolean);
+    await onSave(item, {
+      category: draft.category,
+      evidence: draft.evidence,
+      expectedResult: expectedResults.join("\n"),
+      expectedResults,
+      module: draft.module,
+      preconditions: draft.preconditions,
+      priority: draft.priority,
+      steps,
+      testPoint: draft.testPoint,
+      title: draft.title,
+    });
+    setEditing(false);
+  }
 
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -1112,9 +1231,66 @@ function HistoryCaseCard({
             <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", reviewStatusStyles[reviewStatus])}>{reviewStatus}</span>
             <span className="text-xs text-slate-400">{template.id}</span>
           </div>
-          <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
-          <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
-          {item.testPoint || item.evidence ? (
+          {editing ? (
+            <div className="mt-3 grid gap-3">
+              <input
+                className="min-h-11 rounded-lg border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 outline-none transition focus:border-teal-500"
+                value={draft.title}
+                onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))}
+              />
+              <input
+                className="min-h-10 rounded-lg border border-slate-200 bg-slate-50 px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
+                value={draft.module}
+                onChange={(event) => setDraft((value) => ({ ...value, module: event.target.value }))}
+              />
+              <div className="flex flex-wrap gap-2">
+                {categories.map((category) => (
+                  <button
+                    key={category}
+                    className={clsx(
+                      "rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition",
+                      draft.category === category ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50",
+                    )}
+                    type="button"
+                    onClick={() => setDraft((value) => ({ ...value, category }))}
+                  >
+                    {category}
+                  </button>
+                ))}
+                {priorityOptions.map((priority) => (
+                  <button
+                    key={priority}
+                    className={clsx(
+                      "rounded-lg px-3 py-1.5 text-xs font-medium ring-1 transition",
+                      draft.priority === priority ? "bg-teal-700 text-white ring-teal-700" : "bg-white text-slate-600 ring-slate-200 hover:bg-slate-50",
+                    )}
+                    type="button"
+                    onClick={() => setDraft((value) => ({ ...value, priority }))}
+                  >
+                    {priority}
+                  </button>
+                ))}
+              </div>
+              <input
+                className="min-h-10 rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
+                placeholder="测试点"
+                value={draft.testPoint}
+                onChange={(event) => setDraft((value) => ({ ...value, testPoint: event.target.value }))}
+              />
+              <textarea
+                className="min-h-20 rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+                placeholder="依据"
+                value={draft.evidence}
+                onChange={(event) => setDraft((value) => ({ ...value, evidence: event.target.value }))}
+              />
+            </div>
+          ) : (
+            <>
+              <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
+              <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
+            </>
+          )}
+          {!editing && (item.testPoint || item.evidence) ? (
             <p className="mt-2 break-words text-sm leading-6 text-slate-500">
               {item.testPoint ? `测试点：${item.testPoint}` : ""}
               {item.testPoint && item.evidence ? " ｜ " : ""}
@@ -1122,47 +1298,105 @@ function HistoryCaseCard({
             </p>
           ) : null}
         </div>
-        <label className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
-          状态
-          <select
-            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-800 outline-none transition focus:border-teal-500 disabled:cursor-wait disabled:text-slate-400"
-            disabled={updating}
-            value={reviewStatus}
-            onChange={(event) => onStatusChange(item, event.target.value as CaseReviewStatus)}
-          >
+        <div className="flex shrink-0 flex-col gap-2">
+          <div className="flex flex-wrap gap-1 rounded-lg border border-slate-200 bg-slate-50 p-1">
             {caseReviewStatuses.map((status) => (
-              <option key={status} value={status}>
+              <button
+                key={status}
+                className={clsx(
+                  "min-h-8 rounded-md px-2 text-xs font-medium transition disabled:cursor-wait",
+                  reviewStatus === status ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-950",
+                )}
+                disabled={updating}
+                type="button"
+                onClick={() => onStatusChange(item, status)}
+              >
                 {status}
-              </option>
+              </button>
             ))}
-          </select>
-          {updating ? <Loader2 className="size-4 animate-spin text-teal-600" /> : null}
-        </label>
+            {updating ? <Loader2 className="mx-1 size-4 self-center animate-spin text-teal-600" /> : null}
+          </div>
+          {editing ? (
+            <div className="flex gap-2 sm:justify-end">
+              <button
+                className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                disabled={saving}
+                type="button"
+                onClick={saveDraft}
+              >
+                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                保存
+              </button>
+              <button
+                className="grid size-9 place-items-center rounded-lg border border-slate-200 text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                disabled={saving}
+                title="取消编辑"
+                type="button"
+                onClick={() => setEditing(false)}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+          ) : (
+            <button
+              className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
+              type="button"
+              onClick={startEditing}
+            >
+              <Pencil className="size-4" />
+              编辑
+            </button>
+          )}
+        </div>
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
-          <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
+          {editing ? (
+            <textarea
+              className="mt-2 min-h-24 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+              value={draft.preconditions}
+              onChange={(event) => setDraft((value) => ({ ...value, preconditions: event.target.value }))}
+            />
+          ) : (
+            <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
+          )}
         </div>
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
-          <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-            {item.steps.map((step, index) => (
-              <li key={`${item.id}-history-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
-                <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
-                <span className="min-w-0 break-words">{step}</span>
-              </li>
-            ))}
-          </ol>
+          {editing ? (
+            <textarea
+              className="mt-2 min-h-36 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+              value={draft.stepsText}
+              onChange={(event) => setDraft((value) => ({ ...value, stepsText: event.target.value }))}
+            />
+          ) : (
+            <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+              {item.steps.map((step, index) => (
+                <li key={`${item.id}-history-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
+                  <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
+                  <span className="min-w-0 break-words">{step}</span>
+                </li>
+              ))}
+            </ol>
+          )}
         </div>
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
-          <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
-            {template.expectedResults.split("\n").map((line, index) => (
-              <p key={`${item.id}-history-expected-${index}`} className="break-words">{line}</p>
-            ))}
-          </div>
+          {editing ? (
+            <textarea
+              className="mt-2 min-h-36 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+              value={draft.expectedResultsText}
+              onChange={(event) => setDraft((value) => ({ ...value, expectedResultsText: event.target.value }))}
+            />
+          ) : (
+            <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
+              {template.expectedResults.split("\n").map((line, index) => (
+                <p key={`${item.id}-history-expected-${index}`} className="break-words">{line}</p>
+              ))}
+            </div>
+          )}
         </div>
       </div>
     </article>
