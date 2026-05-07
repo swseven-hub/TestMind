@@ -10,22 +10,28 @@ import {
   Check,
   CheckCircle2,
   ChevronDown,
-  ChevronRight,
   Clock3,
-  Database,
   Download,
   Eye,
   EyeOff,
   FileText,
+  History,
   KeyRound,
   ListChecks,
   Loader2,
   Minimize2,
+  Monitor,
+  Moon,
+  PanelLeftClose,
+  PanelLeftOpen,
+  PanelRightClose,
+  PanelRightOpen,
   PlayCircle,
   Search,
   Shield,
   Sparkles,
   Square,
+  Sun,
   Terminal,
   UploadCloud,
   X,
@@ -98,9 +104,23 @@ const riskLabels: Record<RiskLevel, string> = {
 
 const storageKeys = {
   provider: "testmind.provider",
+  theme: "testmind.theme.v1",
+  leftRailCollapsed: "testmind.ui.leftRailCollapsed.v1",
+  rightRailCollapsed: "testmind.ui.rightRailCollapsed.v1",
+  modelPanelOpen: "testmind.ui.modelPanelOpen.v1",
+  modulePanelOpen: "testmind.ui.modulePanelOpen.v1",
+  categoryPanelOpen: "testmind.ui.categoryPanelOpen.v1",
 };
 
 const providerOptions: Provider[] = ["deepseek", "aliyun", "openai", "velotric"];
+
+type ThemeMode = "light" | "dark" | "system";
+
+const themeOptions: Array<{ value: ThemeMode; label: string; icon: typeof Sun }> = [
+  { value: "light", label: "亮色", icon: Sun },
+  { value: "dark", label: "暗色", icon: Moon },
+  { value: "system", label: "系统", icon: Monitor },
+];
 
 function apiKeyStorageKey(provider: Provider) {
   return `testmind.${provider}.apiKey`;
@@ -158,6 +178,40 @@ function useStoredValue(key: string, fallback: string) {
 
 function useStoredProvider() {
   return normalizeProvider(useStoredValue(storageKeys.provider, "deepseek"));
+}
+
+function writeStoredBoolean(key: string, value: boolean) {
+  writeStoredValue(key, value ? "1" : "0");
+}
+
+function useStoredBoolean(key: string, fallback: boolean) {
+  return useStoredValue(key, fallback ? "1" : "0") === "1";
+}
+
+function normalizeThemeMode(value: string): ThemeMode {
+  if (value === "light" || value === "dark" || value === "system") return value;
+  return "system";
+}
+
+function useThemeMode() {
+  const themeMode = normalizeThemeMode(useStoredValue(storageKeys.theme, "system"));
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+
+    const media = window.matchMedia("(prefers-color-scheme: dark)");
+    const applyTheme = () => {
+      const dark = themeMode === "dark" || (themeMode === "system" && media.matches);
+      document.documentElement.classList.toggle("dark", dark);
+      document.documentElement.style.colorScheme = dark ? "dark" : "light";
+    };
+
+    applyTheme();
+    media.addEventListener("change", applyTheme);
+    return () => media.removeEventListener("change", applyTheme);
+  }, [themeMode]);
+
+  return themeMode;
 }
 
 function subscribeClientReady(callback: () => void) {
@@ -466,74 +520,112 @@ function ApiKeyConfigSkeleton() {
   );
 }
 
-function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () => void }) {
+function DemoExperiencePopover({ active, open, onLoad, onOpenChange }: { active: boolean; open: boolean; onLoad: () => void; onOpenChange: (value: boolean) => void }) {
   const moduleCount = new Set(demoGenerateResponse.cases.map((item) => item.module)).size;
+  const [isHovering, setIsHovering] = useState(false);
 
   return (
-    <div className="rounded-lg border border-teal-200 bg-teal-50/70 p-4 shadow-sm">
-      <div className="flex items-start justify-between gap-3">
-        <div>
-          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
-            <BookOpen className="size-4" />
-            快速体验
-          </div>
-          <h2 className="mt-2 text-lg font-semibold tracking-normal">内嵌示例 PRD</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-600">不用上传 PDF 和 API Key，直接查看完整生成效果。</p>
-        </div>
-        <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
-          {demoGenerateResponse.cases.length} 条
-        </span>
-      </div>
-
-      <div className="mt-4 grid grid-cols-2 border-y border-teal-200/70 py-3 text-sm">
-        <div>
-          <p className="text-xs text-teal-700/70">模块</p>
-          <p className="mt-1 font-semibold text-slate-800">{moduleCount} 个</p>
-        </div>
-        <div className="border-l border-teal-200/70 pl-4">
-          <p className="text-xs text-teal-700/70">覆盖类型</p>
-          <p className="mt-1 font-semibold text-slate-800">5 类</p>
-        </div>
-      </div>
-
-      <div className="mt-4 space-y-2">
-        {demoPrdHighlights.slice(0, 3).map((item) => (
-          <div key={item} className="grid grid-cols-[20px_1fr] gap-2 text-sm leading-6 text-slate-700">
-            <ListChecks className="mt-1 size-4 text-teal-600" />
-            <span>{item}</span>
-          </div>
-        ))}
-      </div>
-
+    <div
+      className="group relative"
+      onMouseEnter={() => {
+        setIsHovering(true);
+        onOpenChange(true);
+      }}
+      onMouseLeave={() => {
+        setIsHovering(false);
+        onOpenChange(false);
+      }}
+    >
       <button
-        className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800"
+        aria-expanded={open}
+        className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
         type="button"
-        onClick={onLoad}
+        onClick={() => onOpenChange(open && !isHovering ? false : true)}
       >
-        <PlayCircle className="size-4" />
-        {active ? "重新加载演示案例" : "一键体验演示案例"}
+        <BookOpen className="size-4" />
+        演示案例
+        <span className="rounded-full bg-white px-1.5 py-0.5 text-xs text-teal-700 ring-1 ring-teal-200">{demoGenerateResponse.cases.length}</span>
       </button>
+
+      <div
+        className={clsx(
+          "absolute right-0 top-full z-30 mt-2 w-[min(360px,calc(100vw-2rem))] rounded-lg border border-teal-200 bg-white p-4 text-left shadow-xl",
+          open ? "block" : "hidden",
+        )}
+      >
+        <div className="flex items-start justify-between gap-3">
+          <div>
+            <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+              <BookOpen className="size-4" />
+              快速体验
+            </div>
+            <h2 className="mt-2 text-base font-semibold tracking-normal">内嵌示例 PRD</h2>
+            <p className="mt-1 text-sm leading-6 text-slate-600">不用上传 PDF 和 API Key，直接查看完整生成效果。</p>
+          </div>
+          <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+            {demoGenerateResponse.cases.length} 条
+          </span>
+        </div>
+
+        <div className="mt-4 grid grid-cols-2 border-y border-teal-200/70 py-3 text-sm">
+          <div>
+            <p className="text-xs text-teal-700/70">模块</p>
+            <p className="mt-1 font-semibold text-slate-800">{moduleCount} 个</p>
+          </div>
+          <div className="border-l border-teal-200/70 pl-4">
+            <p className="text-xs text-teal-700/70">覆盖类型</p>
+            <p className="mt-1 font-semibold text-slate-800">5 类</p>
+          </div>
+        </div>
+
+        <div className="mt-4 space-y-2">
+          {demoPrdHighlights.slice(0, 3).map((item) => (
+            <div key={item} className="grid grid-cols-[20px_1fr] gap-2 text-sm leading-6 text-slate-700">
+              <ListChecks className="mt-1 size-4 text-teal-600" />
+              <span>{item}</span>
+            </div>
+          ))}
+        </div>
+
+        <button
+          className="mt-4 inline-flex h-10 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800"
+          type="button"
+          onClick={() => {
+            onLoad();
+            onOpenChange(false);
+          }}
+        >
+          <PlayCircle className="size-4" />
+          {active ? "重新加载演示案例" : "一键体验演示案例"}
+        </button>
+      </div>
     </div>
   );
 }
 
-function RunHistoryEntryCard({ count }: { count: number }) {
+function ThemeToggle({ value, onChange }: { value: ThemeMode; onChange: (value: ThemeMode) => void }) {
   return (
-    <Link
-      className="group flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-teal-200 hover:bg-teal-50/40"
-      href="/history"
-    >
-      <span className="flex min-w-0 items-center gap-3">
-        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-slate-950 text-white">
-          <Database className="size-4" />
-        </span>
-        <span className="min-w-0">
-          <span className="block text-sm font-semibold text-slate-800">查看运行记录</span>
-          <span className="mt-0.5 block truncate text-xs text-slate-500">{count ? `数据库已保存 ${count} 次生成结果` : "生成成功后会自动持久化到本地数据库"}</span>
-        </span>
-      </span>
-      <ChevronRight className="size-4 shrink-0 text-slate-400 transition group-hover:translate-x-0.5 group-hover:text-slate-700" />
-    </Link>
+    <div className="flex rounded-lg border border-slate-200 bg-white p-1 shadow-sm">
+      {themeOptions.map((item) => {
+        const Icon = item.icon;
+        const active = value === item.value;
+        return (
+          <button
+            key={item.value}
+            aria-label={`切换到${item.label}模式`}
+            className={clsx(
+              "grid size-8 place-items-center rounded-md text-slate-500 transition",
+              active ? "bg-slate-950 text-white" : "hover:bg-slate-50 hover:text-slate-800",
+            )}
+            title={item.label}
+            type="button"
+            onClick={() => onChange(item.value)}
+          >
+            <Icon className="size-4" />
+          </button>
+        );
+      })}
+    </div>
   );
 }
 
@@ -929,9 +1021,16 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
   );
 }
 
+function moduleSectionId(moduleName: string) {
+  let hash = 0;
+  for (const char of moduleName) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
+  return `case-module-${hash.toString(36)}`;
+}
+
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const pendingScrollModuleRef = useRef<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [activeModule, setActiveModule] = useState("全部");
@@ -950,6 +1049,13 @@ export default function Home() {
   const reasoningEffort = normalizeReasoningEffort(useStoredValue(reasoningEffortStorageKey(provider), "medium"));
   const runHistory = useRunHistory();
   const [showApiKey, setShowApiKey] = useState(false);
+  const themeMode = useThemeMode();
+  const leftRailCollapsed = useStoredBoolean(storageKeys.leftRailCollapsed, false);
+  const rightRailCollapsed = useStoredBoolean(storageKeys.rightRailCollapsed, false);
+  const modelPanelOpen = useStoredBoolean(storageKeys.modelPanelOpen, false);
+  const modulePanelOpen = useStoredBoolean(storageKeys.modulePanelOpen, true);
+  const categoryPanelOpen = useStoredBoolean(storageKeys.categoryPanelOpen, true);
+  const [demoDetailsOpen, setDemoDetailsOpen] = useState(false);
   const [progressOpen, setProgressOpen] = useState(false);
   const [progressStatus, setProgressStatus] = useState<ProgressStatus>("idle");
   const [progressLogs, setProgressLogs] = useState<ProgressLog[]>([]);
@@ -962,10 +1068,18 @@ export default function Home() {
   const [lastEventAt, setLastEventAt] = useState(0);
   const now = useTicker(isLoading || progressOpen);
   const isDemoResult = result?.source === "demo";
-  const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "本地可运行";
+  const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "待生成";
   const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
   const idleEventMs = lastEventAt ? now - lastEventAt : elapsedMs;
+  const modelSummary = provider === "aliyun" ? thinkingModeLabels[thinkingMode] : `推理${reasoningEffortLabels[reasoningEffort]}`;
+  const workspaceGridClass = leftRailCollapsed
+    ? rightRailCollapsed
+      ? "lg:grid-cols-[72px_minmax(0,1fr)_72px]"
+      : "lg:grid-cols-[72px_minmax(0,1fr)_280px]"
+    : rightRailCollapsed
+      ? "lg:grid-cols-[370px_minmax(0,1fr)_72px]"
+      : "lg:grid-cols-[370px_minmax(0,1fr)_280px]";
 
   const visibleCases = useMemo(() => {
     const normalized = query.trim().toLowerCase();
@@ -1026,6 +1140,34 @@ export default function Home() {
       .sort((a, b) => (moduleOrder.get(a[0]) ?? 999) - (moduleOrder.get(b[0]) ?? 999))
       .map(([moduleName, cases]) => ({ moduleName, cases }));
   }, [moduleNames, visibleCases]);
+
+  useEffect(() => {
+    const moduleName = pendingScrollModuleRef.current;
+    if (!moduleName) return;
+
+    pendingScrollModuleRef.current = null;
+    window.setTimeout(() => {
+      const target = moduleName === "全部" ? document.getElementById("case-results") : document.getElementById(moduleSectionId(moduleName));
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }, [groupedCases]);
+
+  function scrollToCases(moduleName = activeModule) {
+    window.setTimeout(() => {
+      const target = moduleName === "全部" ? document.getElementById("case-results") : document.getElementById(moduleSectionId(moduleName));
+      target?.scrollIntoView({ behavior: "smooth", block: "start" });
+    }, 0);
+  }
+
+  function selectModule(moduleName: string) {
+    pendingScrollModuleRef.current = moduleName;
+    setActiveModule(moduleName);
+    if (moduleName === activeModule) scrollToCases(moduleName);
+  }
+
+  function toggleStoredBoolean(key: string, current: boolean) {
+    writeStoredBoolean(key, !current);
+  }
 
   function pickFile(nextFile?: File) {
     if (!nextFile) return;
@@ -1287,7 +1429,7 @@ export default function Home() {
       ) : null}
 
       <section className="border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
-        <div className="mx-auto flex max-w-[1440px] items-center justify-between px-5 py-4 sm:px-8">
+        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
           <div className="flex items-center gap-3">
             <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
               <Bot className="size-5" />
@@ -1297,24 +1439,129 @@ export default function Home() {
               <p className="text-sm text-slate-500">需求文档转测试用例</p>
             </div>
           </div>
-          <div className="hidden items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-800 sm:flex">
-            <Sparkles className="size-4 text-teal-600" />
-            {sourceLabel}
+          <div className="flex flex-wrap items-center gap-2">
+            {isLoading ? (
+              <button
+                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
+                type="button"
+                onClick={() => setProgressOpen(true)}
+              >
+                <Loader2 className="size-4 animate-spin" />
+                已运行 {formatDuration(elapsedMs)}
+              </button>
+            ) : null}
+            <Link
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+              href="/history"
+              title={runHistory.length ? `数据库已保存 ${runHistory.length} 次生成结果` : "查看运行记录"}
+            >
+              <History className="size-4" />
+              运行记录
+            </Link>
+            <button
+              aria-label={leftRailCollapsed ? "展开左侧生成配置" : "收起左侧生成配置"}
+              className="grid size-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+              title={leftRailCollapsed ? "展开左栏" : "收起左栏"}
+              type="button"
+              onClick={() => toggleStoredBoolean(storageKeys.leftRailCollapsed, leftRailCollapsed)}
+            >
+              {leftRailCollapsed ? <PanelLeftOpen className="size-4" /> : <PanelLeftClose className="size-4" />}
+            </button>
+            <button
+              aria-label={rightRailCollapsed ? "展开右侧目录栏" : "收起右侧目录栏"}
+              className="grid size-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
+              title={rightRailCollapsed ? "展开右栏" : "收起右栏"}
+              type="button"
+              onClick={() => toggleStoredBoolean(storageKeys.rightRailCollapsed, rightRailCollapsed)}
+            >
+              {rightRailCollapsed ? <PanelRightOpen className="size-4" /> : <PanelRightClose className="size-4" />}
+            </button>
+            <ThemeToggle value={themeMode} onChange={(value) => writeStoredValue(storageKeys.theme, value)} />
           </div>
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-[1440px] gap-5 px-5 py-5 sm:px-8 lg:grid-cols-[370px_minmax(0,1fr)]">
-        <aside className="space-y-3">
+      <section className={clsx("mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-5 py-5 transition-[grid-template-columns] sm:px-8", workspaceGridClass)}>
+        <aside className="min-w-0">
+          <input
+            ref={inputRef}
+            hidden
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={(event) => pickFile(event.target.files?.[0])}
+          />
+          {leftRailCollapsed ? (
+            <div className="sticky top-5 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+              <div className="flex gap-2 lg:flex-col">
+                <button
+                  aria-label="展开生成配置"
+                  className="grid size-11 place-items-center rounded-lg bg-slate-950 text-white transition hover:bg-slate-800"
+                  title="展开生成配置"
+                  type="button"
+                  onClick={() => writeStoredBoolean(storageKeys.leftRailCollapsed, false)}
+                >
+                  <PanelLeftOpen className="size-4" />
+                </button>
+                <button
+                  aria-label="上传 PRD"
+                  className={clsx(
+                    "grid size-11 place-items-center rounded-lg border transition",
+                    file ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                  )}
+                  title={file ? file.name : "上传 PRD"}
+                  type="button"
+                  onClick={() => inputRef.current?.click()}
+                >
+                  <UploadCloud className="size-4" />
+                </button>
+                <button
+                  aria-label="展开密钥与模型"
+                  className={clsx(
+                    "grid size-11 place-items-center rounded-lg border transition",
+                    apiKey.trim() ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                  )}
+                  title={`${providerLabels[provider]} / ${model} / ${apiKey.trim() ? "密钥已就绪" : "密钥未保存"}`}
+                  type="button"
+                  onClick={() => {
+                    writeStoredBoolean(storageKeys.leftRailCollapsed, false);
+                    writeStoredBoolean(storageKeys.modelPanelOpen, true);
+                  }}
+                >
+                  <KeyRound className="size-4" />
+                </button>
+                <button
+                  aria-label="生成测试用例"
+                  className="grid size-11 place-items-center rounded-lg bg-teal-700 text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+                  disabled={!isClientReady}
+                  title={isLoading ? "查看生成过程" : "生成测试用例"}
+                  type="button"
+                  onClick={generate}
+                >
+                  {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                </button>
+              </div>
+            </div>
+          ) : (
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-900">生成配置</h2>
                 <p className="mt-0.5 text-xs text-slate-500">上传 PRD，配置模型后生成测试用例。</p>
               </div>
-              <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                PDF
-              </span>
+              <div className="flex items-center gap-2">
+                <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                  PDF
+                </span>
+                <button
+                  aria-label="收起生成配置"
+                  className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                  title="收起左栏"
+                  type="button"
+                  onClick={() => writeStoredBoolean(storageKeys.leftRailCollapsed, true)}
+                >
+                  <PanelLeftClose className="size-4" />
+                </button>
+              </div>
             </div>
             <div
               className={clsx(
@@ -1333,13 +1580,6 @@ export default function Home() {
                 pickFile(event.dataTransfer.files[0]);
               }}
             >
-              <input
-                ref={inputRef}
-                hidden
-                type="file"
-                accept="application/pdf,.pdf"
-                onChange={(event) => pickFile(event.target.files?.[0])}
-              />
               <div className="space-y-4">
                 <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
                   <UploadCloud className="size-6" />
@@ -1353,102 +1593,119 @@ export default function Home() {
 
             {isClientReady ? (
               <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-                <div className="flex items-center justify-between gap-3">
-                  <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                    <KeyRound className="size-4 text-teal-700" />
-                    密钥与模型
-                  </div>
-                  <span className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
-                    {providerLabels[provider]}
+                <button
+                  aria-expanded={modelPanelOpen}
+                  className="flex w-full items-center justify-between gap-3 text-left"
+                  type="button"
+                  onClick={() => toggleStoredBoolean(storageKeys.modelPanelOpen, modelPanelOpen)}
+                >
+                  <span className="min-w-0">
+                    <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                      <KeyRound className="size-4 text-teal-700" />
+                      密钥与模型
+                    </span>
+                    <span className="mt-1 block truncate text-xs text-slate-500">
+                      {providerLabels[provider]} / {model || providerModels[provider]} / {modelSummary} / {apiKey.trim() ? "密钥已就绪" : "密钥未保存"}
+                    </span>
                   </span>
-                </div>
-                <div className="mt-3">
-                  <CustomSelect
-                    label="供应商"
-                    options={providerOptions.map((item) => ({
-                      value: item,
-                      label: providerLabels[item],
-                      badge: item === "velotric" ? "公司" : undefined,
-                      description:
-                        item === "velotric"
-                          ? "走公司 GPT 号池网关"
-                          : item === "aliyun"
-                            ? "阿里云百炼兼容接口"
-                            : item === "openai"
-                              ? "OpenAI 官方 API"
-                              : "DeepSeek 官方 API",
-                    }))}
-                    value={provider}
-                    onChange={(value) => selectProvider(normalizeProvider(value))}
-                  />
-                </div>
-                <div className="relative mt-3">
-                  <input
-                    className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-3 pr-11 text-sm outline-none transition focus:border-teal-500"
-                    type={showApiKey ? "text" : "password"}
-                    placeholder="sk-..."
-                    value={apiKey}
-                    spellCheck={false}
-                    autoComplete="off"
-                    onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
-                  />
-                  <button
-                    aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
-                    className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                    type="button"
-                    onClick={() => setShowApiKey((current) => !current)}
-                  >
-                    {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                  </button>
-                </div>
-                <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
-                  <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
-                  <button
-                    className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
-                    disabled={!apiKey.trim()}
-                    type="button"
-                    onClick={clearSavedApiKey}
-                  >
-                    清除密钥
-                  </button>
-                </div>
-                {provider === "aliyun" ? (
-                  <AliyunModelConfig
-                    model={model}
-                    thinkingMode={thinkingMode}
-                    onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                    onThinkingModeChange={(value) => writeStoredValue(thinkingModeStorageKey(provider), value)}
-                  />
-                ) : provider === "deepseek" ? (
-                  <DeepSeekModelConfig
-                    model={model}
-                    onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                  />
-                ) : provider === "velotric" ? (
+                  <div className="flex shrink-0 items-center gap-2">
+                    <span className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
+                      {providerLabels[provider]}
+                    </span>
+                    <ChevronDown className={clsx("size-4 text-slate-500 transition", modelPanelOpen && "rotate-180")} />
+                  </div>
+                </button>
+                {modelPanelOpen ? (
                   <>
-                    <VelotricGatewayConfig
-                      baseURL={baseURL}
-                      model={model}
-                      onBaseURLChange={(value) => writeStoredValue(baseURLStorageKey(provider), value)}
-                      onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                    />
-                    <ReasoningEffortConfig
-                      reasoningEffort={reasoningEffort}
-                      onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
-                    />
+                    <div className="mt-3">
+                      <CustomSelect
+                        label="供应商"
+                        options={providerOptions.map((item) => ({
+                          value: item,
+                          label: providerLabels[item],
+                          badge: item === "velotric" ? "公司" : undefined,
+                          description:
+                            item === "velotric"
+                              ? "走公司 GPT 号池网关"
+                              : item === "aliyun"
+                                ? "阿里云百炼兼容接口"
+                                : item === "openai"
+                                  ? "OpenAI 官方 API"
+                                  : "DeepSeek 官方 API",
+                        }))}
+                        value={provider}
+                        onChange={(value) => selectProvider(normalizeProvider(value))}
+                      />
+                    </div>
+                    <div className="relative mt-3">
+                      <input
+                        className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-3 pr-11 text-sm outline-none transition focus:border-teal-500"
+                        type={showApiKey ? "text" : "password"}
+                        placeholder="sk-..."
+                        value={apiKey}
+                        spellCheck={false}
+                        autoComplete="off"
+                        onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
+                      />
+                      <button
+                        aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
+                        className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
+                        type="button"
+                        onClick={() => setShowApiKey((current) => !current)}
+                      >
+                        {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
+                      </button>
+                    </div>
+                    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
+                      <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
+                      <button
+                        className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
+                        disabled={!apiKey.trim()}
+                        type="button"
+                        onClick={clearSavedApiKey}
+                      >
+                        清除密钥
+                      </button>
+                    </div>
+                    {provider === "aliyun" ? (
+                      <AliyunModelConfig
+                        model={model}
+                        thinkingMode={thinkingMode}
+                        onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                        onThinkingModeChange={(value) => writeStoredValue(thinkingModeStorageKey(provider), value)}
+                      />
+                    ) : provider === "deepseek" ? (
+                      <DeepSeekModelConfig
+                        model={model}
+                        onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                      />
+                    ) : provider === "velotric" ? (
+                      <>
+                        <VelotricGatewayConfig
+                          baseURL={baseURL}
+                          model={model}
+                          onBaseURLChange={(value) => writeStoredValue(baseURLStorageKey(provider), value)}
+                          onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                        />
+                        <ReasoningEffortConfig
+                          reasoningEffort={reasoningEffort}
+                          onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
+                        />
+                      </>
+                    ) : (
+                      <>
+                        <OpenAIModelConfig
+                          model={model}
+                          onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
+                        />
+                        <ReasoningEffortConfig
+                          reasoningEffort={reasoningEffort}
+                          onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
+                        />
+                      </>
+                    )}
                   </>
-                ) : (
-                  <>
-                    <OpenAIModelConfig
-                      model={model}
-                      onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                    />
-                    <ReasoningEffortConfig
-                      reasoningEffort={reasoningEffort}
-                      onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
-                    />
-                  </>
-                )}
+                ) : null}
               </div>
             ) : (
               <ApiKeyConfigSkeleton />
@@ -1470,85 +1727,12 @@ export default function Home() {
               </div>
             ) : null}
           </div>
-
-          <DemoExperienceCard active={isDemoResult} onLoad={loadDemoCase} />
-
-          <RunHistoryEntryCard count={runHistory.length} />
-
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold">模块</h2>
-              <span className="text-sm text-slate-500">{result?.cases.length ?? 0} 条</span>
-            </div>
-            <div className="mt-3 grid gap-1.5">
-              <button
-                className={clsx(
-                  "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
-                  activeModule === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
-                )}
-                onClick={() => setActiveModule("全部")}
-              >
-                <span>全部</span>
-                <span className="shrink-0">{result?.cases.length ?? 0}</span>
-              </button>
-              {moduleNames.map((moduleName) => (
-                <button
-                  key={moduleName}
-                  className={clsx(
-                    "flex min-h-9 w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
-                    activeModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
-                  )}
-                  onClick={() => setActiveModule(moduleName)}
-                >
-                  <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{moduleName}</span>
-                  <span className="shrink-0">{moduleCounts[moduleName]}</span>
-                </button>
-              ))}
-            </div>
-          </div>
-
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-            <div className="flex items-center justify-between">
-              <h2 className="font-semibold">类型</h2>
-              <span className="max-w-40 truncate text-sm text-slate-500">{activeModule}</span>
-            </div>
-            <div className="mt-3 grid gap-1.5">
-              <button
-                className={clsx(
-                  "flex h-9 items-center justify-between rounded-lg px-3 text-sm transition",
-                  activeCategory === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
-                )}
-                onClick={() => setActiveCategory("全部")}
-              >
-                <span>全部</span>
-                <span>{Object.values(categoryCounts).reduce((sum, count) => sum + count, 0)}</span>
-              </button>
-              {categories.map((category) => {
-                const Icon = categoryIcons[category];
-                return (
-                  <button
-                    key={category}
-                    className={clsx(
-                      "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
-                      activeCategory === category ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
-                    )}
-                    onClick={() => setActiveCategory(category)}
-                  >
-                    <span className="flex items-center gap-2">
-                      <Icon className="size-4" />
-                      {category}
-                    </span>
-                    <span>{categoryCounts[category]}</span>
-                  </button>
-                );
-              })}
-            </div>
-          </div>
+          )}
         </aside>
 
-        <section className="min-w-0 space-y-4">
+        <section id="case-results" className="min-w-0 space-y-4">
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-            <div className="flex flex-col gap-4 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
                 <h2 className="text-2xl font-semibold tracking-normal">测试用例</h2>
                 <p className="mt-1 break-words text-sm text-slate-500">{result?.summary ?? "等待 PRD 解析"}</p>
@@ -1561,18 +1745,19 @@ export default function Home() {
                   </span>
                 </div>
               </div>
-              <div className="flex flex-col gap-2 sm:flex-row">
-                <label className="relative block">
+              <div className="flex flex-wrap items-center gap-2">
+                <DemoExperiencePopover active={isDemoResult} open={demoDetailsOpen} onLoad={loadDemoCase} onOpenChange={setDemoDetailsOpen} />
+                <label className="relative block min-w-[180px] flex-1">
                   <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
                   <input
-                    className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none transition focus:border-teal-500 focus:bg-white sm:w-64"
+                    className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none transition focus:border-teal-500 focus:bg-white"
                     placeholder="搜索"
                     value={query}
                     onChange={(event) => setQuery(event.target.value)}
                   />
                 </label>
                 <button
-                  className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+                  className="inline-flex h-10 shrink-0 items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
                   disabled={!result || isExportingExcel}
                   onClick={exportExcel}
                 >
@@ -1596,7 +1781,7 @@ export default function Home() {
           {groupedCases.length > 0 ? (
             <div className="grid gap-5">
               {groupedCases.map((group, groupIndex) => (
-                <section key={`${group.moduleName}-${groupIndex}`} className="space-y-3">
+                <section id={moduleSectionId(group.moduleName)} key={`${group.moduleName}-${groupIndex}`} className="scroll-mt-24 space-y-3">
                   <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                     <div>
                       <h3 className="break-words text-lg font-semibold">{group.moduleName}</h3>
@@ -1660,6 +1845,163 @@ export default function Home() {
             </div>
           )}
         </section>
+        <aside className="min-w-0">
+          <div className="sticky top-5 space-y-3">
+            {rightRailCollapsed ? (
+              <div className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
+                <div className="flex gap-2 lg:flex-col">
+                  <button
+                    aria-label="展开目录面板"
+                    className="grid size-11 place-items-center rounded-lg bg-slate-950 text-white transition hover:bg-slate-800"
+                    title="展开目录"
+                    type="button"
+                    onClick={() => writeStoredBoolean(storageKeys.rightRailCollapsed, false)}
+                  >
+                    <PanelRightOpen className="size-4" />
+                  </button>
+                  <button
+                    aria-label="查看模块目录"
+                    className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                    title={`模块 ${moduleNames.length} 个`}
+                    type="button"
+                    onClick={() => {
+                      writeStoredBoolean(storageKeys.rightRailCollapsed, false);
+                      writeStoredBoolean(storageKeys.modulePanelOpen, true);
+                    }}
+                  >
+                    <ListChecks className="size-4" />
+                  </button>
+                  <button
+                    aria-label="查看类型筛选"
+                    className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                    title={`当前类型：${activeCategory}`}
+                    type="button"
+                    onClick={() => {
+                      writeStoredBoolean(storageKeys.rightRailCollapsed, false);
+                      writeStoredBoolean(storageKeys.categoryPanelOpen, true);
+                    }}
+                  >
+                    <Shield className="size-4" />
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <>
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <h2 className="font-semibold">目录</h2>
+                      <p className="mt-0.5 text-xs text-slate-500">模块跳转与类型筛选</p>
+                    </div>
+                    <button
+                      aria-label="收起目录面板"
+                      className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+                      title="收起右栏"
+                      type="button"
+                      onClick={() => writeStoredBoolean(storageKeys.rightRailCollapsed, true)}
+                    >
+                      <PanelRightClose className="size-4" />
+                    </button>
+                  </div>
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <button
+                    aria-expanded={modulePanelOpen}
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                    type="button"
+                    onClick={() => toggleStoredBoolean(storageKeys.modulePanelOpen, modulePanelOpen)}
+                  >
+                    <span>
+                      <span className="block font-semibold">模块</span>
+                      <span className="mt-0.5 block text-xs text-slate-500">{result?.cases.length ?? 0} 条 · {moduleNames.length} 个模块</span>
+                    </span>
+                    <ChevronDown className={clsx("size-4 text-slate-500 transition", modulePanelOpen && "rotate-180")} />
+                  </button>
+                  {modulePanelOpen ? (
+                    <div className="mt-3 grid max-h-[42vh] gap-1.5 overflow-y-auto pr-1">
+                      <button
+                        className={clsx(
+                          "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
+                          activeModule === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                        )}
+                        type="button"
+                        onClick={() => selectModule("全部")}
+                      >
+                        <span>全部</span>
+                        <span className="shrink-0">{result?.cases.length ?? 0}</span>
+                      </button>
+                      {moduleNames.map((moduleName) => (
+                        <button
+                          key={moduleName}
+                          className={clsx(
+                            "flex min-h-9 w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
+                            activeModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                          )}
+                          type="button"
+                          onClick={() => selectModule(moduleName)}
+                        >
+                          <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{moduleName}</span>
+                          <span className="shrink-0">{moduleCounts[moduleName]}</span>
+                        </button>
+                      ))}
+                    </div>
+                  ) : null}
+                </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <button
+                    aria-expanded={categoryPanelOpen}
+                    className="flex w-full items-center justify-between gap-3 text-left"
+                    type="button"
+                    onClick={() => toggleStoredBoolean(storageKeys.categoryPanelOpen, categoryPanelOpen)}
+                  >
+                    <span>
+                      <span className="block font-semibold">类型</span>
+                      <span className="mt-0.5 block max-w-48 truncate text-xs text-slate-500">{activeModule} / {activeCategory}</span>
+                    </span>
+                    <ChevronDown className={clsx("size-4 text-slate-500 transition", categoryPanelOpen && "rotate-180")} />
+                  </button>
+                  {categoryPanelOpen ? (
+                    <div className="mt-3 grid gap-1.5">
+                      <button
+                        className={clsx(
+                          "flex h-9 items-center justify-between rounded-lg px-3 text-sm transition",
+                          activeCategory === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                        )}
+                        type="button"
+                        onClick={() => setActiveCategory("全部")}
+                      >
+                        <span>全部</span>
+                        <span>{Object.values(categoryCounts).reduce((sum, count) => sum + count, 0)}</span>
+                      </button>
+                      {categories.map((category) => {
+                        const Icon = categoryIcons[category];
+                        return (
+                          <button
+                            key={category}
+                            className={clsx(
+                              "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
+                              activeCategory === category ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                            )}
+                            type="button"
+                            onClick={() => setActiveCategory(category)}
+                          >
+                            <span className="flex items-center gap-2">
+                              <Icon className="size-4" />
+                              {category}
+                            </span>
+                            <span>{categoryCounts[category]}</span>
+                          </button>
+                        );
+                      })}
+                    </div>
+                  ) : null}
+                </div>
+              </>
+            )}
+          </div>
+        </aside>
       </section>
     </main>
   );

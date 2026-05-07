@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
 
 :root {
   color-scheme: light;
@@ -22,4 +23,83 @@ body {
 button,
 input {
   font: inherit;
+}
+
+.dark body {
+  background: #0f172a;
+  color: #e2e8f0;
+}
+
+.dark main {
+  background-color: #0f172a !important;
+  color: #e2e8f0 !important;
+}
+
+.dark .bg-white,
+.dark .bg-white\/80,
+.dark .bg-white\/90 {
+  background-color: #111827 !important;
+}
+
+.dark .bg-slate-50,
+.dark .bg-slate-50\/80 {
+  background-color: #0f172a !important;
+}
+
+.dark .bg-slate-100 {
+  background-color: #1f2937 !important;
+}
+
+.dark .bg-teal-50,
+.dark .bg-teal-50\/30,
+.dark .bg-teal-50\/40,
+.dark .bg-teal-50\/70 {
+  background-color: rgba(20, 184, 166, 0.12) !important;
+}
+
+.dark .text-slate-950,
+.dark .text-slate-900,
+.dark .text-slate-800,
+.dark .text-slate-700 {
+  color: #e2e8f0 !important;
+}
+
+.dark .text-slate-600,
+.dark .text-slate-500 {
+  color: #94a3b8 !important;
+}
+
+.dark .text-slate-400 {
+  color: #64748b !important;
+}
+
+.dark .border-slate-100,
+.dark .border-slate-200,
+.dark .border-slate-300 {
+  border-color: #334155 !important;
+}
+
+.dark .border-teal-200 {
+  border-color: rgba(45, 212, 191, 0.45) !important;
+}
+
+.dark .ring-slate-100,
+.dark .ring-slate-200 {
+  --tw-ring-color: #334155 !important;
+}
+
+.dark .ring-teal-100,
+.dark .ring-teal-200 {
+  --tw-ring-color: rgba(45, 212, 191, 0.45) !important;
+}
+
+.dark input,
+.dark textarea {
+  background-color: #0f172a !important;
+  color: #e2e8f0 !important;
+}
+
+.dark input::placeholder,
+.dark textarea::placeholder {
+  color: #64748b !important;
 }
