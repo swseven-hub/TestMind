@@ -4,6 +4,7 @@ import { DatabaseSync } from "node:sqlite";
 
 import type { GenerateResponse, GenerationUsage, RunStatus, ThinkingMode } from "@/types/test-case";
 import type { Provider } from "@/lib/model-config";
+import type { CaseReviewStatus } from "@/lib/case-review";
 
 export type StoredRunHistoryRecord = {
   id: string;
@@ -250,6 +251,40 @@ export function saveRunHistoryRecord(input: {
     ...(input.lastEvent ? { lastEvent: input.lastEvent } : {}),
     result: input.result,
   } satisfies StoredRunHistoryRecord;
+}
+
+export function updateRunHistoryCaseStatuses(
+  id: string,
+  updates: Array<{
+    caseId: string;
+    module: string;
+    status: CaseReviewStatus;
+  }>,
+) {
+  if (!updates.length) return null;
+
+  const db = getDatabase();
+  const row = db.prepare("SELECT * FROM run_history WHERE id = ?").get(id) as RunHistoryRow | undefined;
+  if (!row) return null;
+
+  const result = JSON.parse(row.result_json) as GenerateResponse;
+  let updatedCount = 0;
+
+  for (const update of updates) {
+    const item = result.cases.find((candidate) => candidate.id === update.caseId && candidate.module === update.module);
+    if (!item) continue;
+    item.status = update.status;
+    updatedCount += 1;
+  }
+
+  if (!updatedCount) return rowToRecord(row);
+
+  db.prepare("UPDATE run_history SET result_json = ? WHERE id = ?").run(JSON.stringify(result), id);
+
+  return rowToRecord({
+    ...row,
+    result_json: JSON.stringify(result),
+  });
 }
 
 export function deleteRunHistoryRecord(id: string) {

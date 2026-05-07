@@ -1,4 +1,5 @@
 import type { TestCase, TestCaseImportType, TestCategory, TestExecutionType } from "@/types/test-case";
+import { getCaseReviewStatus } from "@/lib/case-review";
 
 export const testcaseTemplateSheetName = "test_case";
 
@@ -86,7 +87,7 @@ export function getTemplateCaseFields(item: TestCase) {
     module: normalizeTemplateText(item.module, "无模块用例"),
     id: normalizeTemplateText(item.id),
     title: normalizeTemplateText(item.title, "未命名测试用例"),
-    status: normalizeTemplateText(item.status),
+    status: getCaseReviewStatus(item),
     maintainer,
     caseType: normalizeCaseType(item.caseType, item.category),
     priority: item.priority,

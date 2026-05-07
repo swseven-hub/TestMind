@@ -6,9 +6,12 @@ import {
   AlertCircle,
   ArrowLeft,
   CheckCircle2,
+  CheckCheck,
   ChevronDown,
   ChevronLeft,
   ChevronRight,
+  CircleAlert,
+  ClipboardCheck,
   Download,
   FileText,
   History,
@@ -26,8 +29,9 @@ import {
 import clsx from "clsx";
 
 import { downloadExcel } from "@/lib/download-excel";
+import { buildCoverageReview, caseReviewStatuses, getCaseIdentity, getCaseReviewStatus, type CaseReviewStatus, type CoverageReviewIssue } from "@/lib/case-review";
 import { providerLabels, reasoningEffortLabels, thinkingModeLabels } from "@/lib/model-config";
-import { clearRunHistory, formatDuration, formatRunTime, formatTokens, removeRunHistoryRecord, useRunHistory, type RunHistoryRecord } from "@/lib/run-history";
+import { clearRunHistory, formatDuration, formatRunTime, formatTokens, removeRunHistoryRecord, updateRunHistoryCaseStatuses, useRunHistory, type RunHistoryRecord } from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type { RunStatus, TestCase, TestCategory } from "@/types/test-case";
 
@@ -59,6 +63,25 @@ const statusStyles: Record<RunStatus, string> = {
   success: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   failed: "bg-rose-50 text-rose-700 ring-rose-200",
   cancelled: "bg-amber-50 text-amber-700 ring-amber-200",
+};
+
+const reviewStatusStyles: Record<CaseReviewStatus, string> = {
+  待确认: "bg-slate-100 text-slate-700 ring-slate-200",
+  已采纳: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  需修改: "bg-amber-50 text-amber-700 ring-amber-200",
+  已废弃: "bg-rose-50 text-rose-700 ring-rose-200",
+};
+
+const coverageSeverityStyles: Record<CoverageReviewIssue["severity"], string> = {
+  high: "border-rose-200 bg-rose-50 text-rose-800",
+  medium: "border-amber-200 bg-amber-50 text-amber-800",
+  info: "border-sky-200 bg-sky-50 text-sky-800",
+};
+
+const coverageSeverityLabels: Record<CoverageReviewIssue["severity"], string> = {
+  high: "高风险",
+  medium: "需关注",
+  info: "提示",
 };
 
 const historyUiStorageKeys = {
@@ -212,16 +235,96 @@ function formatJsonPreview(value: unknown) {
   }
 }
 
+function createExportResult(record: RunHistoryRecord, cases: TestCase[], suffix: string) {
+  const baseName = record.result.fileName.replace(/\.pdf$/i, "");
+  return {
+    ...record.result,
+    fileName: suffix ? `${baseName}-${suffix}.pdf` : record.result.fileName,
+    cases,
+  };
+}
+
+function CoverageReviewPanel({
+  issues,
+  onSelectModule,
+}: {
+  issues: CoverageReviewIssue[];
+  onSelectModule: (moduleName: string) => void;
+}) {
+  const highCount = issues.filter((item) => item.severity === "high").length;
+  const mediumCount = issues.filter((item) => item.severity === "medium").length;
+  const visibleIssues = issues.slice(0, 8);
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2">
+            <ClipboardCheck className="size-4 text-teal-700" />
+            <h2 className="font-semibold">覆盖审查</h2>
+            <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+              {issues.length ? `${issues.length} 个发现` : "暂未发现明显缺口"}
+            </span>
+          </div>
+          <p className="mt-1 text-sm leading-6 text-slate-500">
+            基于覆盖蓝图和最终用例自动检查模块、测试类型、测试点的缺口，先帮你找最可能漏测的地方。
+          </p>
+        </div>
+        <div className="flex shrink-0 flex-wrap gap-2">
+          <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200">高风险 {highCount}</span>
+          <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200">需关注 {mediumCount}</span>
+        </div>
+      </div>
+
+      {visibleIssues.length ? (
+        <div className="mt-4 grid gap-2">
+          {visibleIssues.map((issue) => (
+            <div key={issue.id} className={clsx("rounded-lg border px-3 py-2", coverageSeverityStyles[issue.severity])}>
+              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                <div className="min-w-0">
+                  <div className="flex flex-wrap items-center gap-2">
+                    <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold ring-1 ring-current/10">
+                      {coverageSeverityLabels[issue.severity]}
+                    </span>
+                    <p className="font-medium">{issue.title}</p>
+                  </div>
+                  <p className="mt-1 break-words text-sm leading-6 opacity-90">{issue.detail}</p>
+                </div>
+                {issue.moduleName ? (
+                  <button
+                    className="shrink-0 rounded-md bg-white/70 px-2.5 py-1 text-xs font-medium ring-1 ring-current/10 transition hover:bg-white"
+                    type="button"
+                    onClick={() => onSelectModule(issue.moduleName as string)}
+                  >
+                    查看模块
+                  </button>
+                ) : null}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-800">
+          当前结果与覆盖蓝图的模块、类型和测试点目标基本匹配，后续可以进入人工确认和定稿导出。
+        </div>
+      )}
+    </section>
+  );
+}
+
 export default function HistoryPage() {
   const history = useRunHistory();
   const [activeId, setActiveId] = useState("");
   const [activeModule, setActiveModule] = useState("全部");
+  const [activeReviewStatus, setActiveReviewStatus] = useState<CaseReviewStatus | "全部">("全部");
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(50);
   const [leftRailCollapsed, setLeftRailCollapsed] = useStoredBoolean(historyUiStorageKeys.leftRailCollapsed, false);
   const [rightRailCollapsed, setRightRailCollapsed] = useStoredBoolean(historyUiStorageKeys.rightRailCollapsed, false);
   const [summaryOpen, setSummaryOpen] = useStoredBoolean(historyUiStorageKeys.summaryOpen, true);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
+  const [updatingStatusKey, setUpdatingStatusKey] = useState("");
+  const [bulkUpdatingStatus, setBulkUpdatingStatus] = useState<CaseReviewStatus | "">("");
   const [error, setError] = useState("");
   const selectedRecord = history.find((record) => record.id === activeId) ?? history[0] ?? null;
   const allCases = useMemo(() => selectedRecord?.result.cases ?? [], [selectedRecord]);
@@ -240,7 +343,18 @@ export default function HistoryPage() {
   }, [allCases]);
   const moduleNames = useMemo(() => Object.keys(moduleCounts).sort((a, b) => moduleCounts[b] - moduleCounts[a] || a.localeCompare(b, "zh-CN")), [moduleCounts]);
   const currentModule = activeModule === "全部" || moduleCounts[activeModule] ? activeModule : "全部";
-  const visibleCases = useMemo(() => (currentModule === "全部" ? allCases : allCases.filter((item) => item.module === currentModule)), [allCases, currentModule]);
+  const moduleFilteredCases = useMemo(() => (currentModule === "全部" ? allCases : allCases.filter((item) => item.module === currentModule)), [allCases, currentModule]);
+  const reviewStatusCounts = useMemo(() => {
+    const data = Object.fromEntries(caseReviewStatuses.map((status) => [status, 0])) as Record<CaseReviewStatus, number>;
+    for (const item of moduleFilteredCases) data[getCaseReviewStatus(item)] += 1;
+    return data;
+  }, [moduleFilteredCases]);
+  const acceptedCases = useMemo(() => allCases.filter((item) => getCaseReviewStatus(item) === "已采纳"), [allCases]);
+  const visibleCases = useMemo(
+    () => (activeReviewStatus === "全部" ? moduleFilteredCases : moduleFilteredCases.filter((item) => getCaseReviewStatus(item) === activeReviewStatus)),
+    [activeReviewStatus, moduleFilteredCases],
+  );
+  const coverageIssues = useMemo(() => buildCoverageReview(selectedRecord?.result), [selectedRecord]);
   const totalPages = Math.max(1, Math.ceil(visibleCases.length / pageSize));
   const safePage = Math.min(currentPage, totalPages);
   const pageStart = visibleCases.length ? (safePage - 1) * pageSize + 1 : 0;
@@ -253,17 +367,54 @@ export default function HistoryPage() {
     return data;
   }, [visibleCases]);
 
-  async function exportSelectedExcel() {
+  async function exportCases(cases: TestCase[], suffix: string) {
     if (!selectedRecord || isExportingExcel) return;
+    if (!cases.length) {
+      setError("没有符合条件的测试用例可导出。");
+      return;
+    }
 
     setIsExportingExcel(true);
     setError("");
     try {
-      await downloadExcel(selectedRecord.result);
+      await downloadExcel(createExportResult(selectedRecord, cases, suffix));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Excel 导出失败，请稍后重试。");
     } finally {
       setIsExportingExcel(false);
+    }
+  }
+
+  async function updateCaseStatus(item: TestCase, status: CaseReviewStatus) {
+    if (!selectedRecord) return;
+
+    const statusKey = getCaseIdentity(item);
+    setUpdatingStatusKey(statusKey);
+    setError("");
+    try {
+      await updateRunHistoryCaseStatuses(selectedRecord.id, [{ caseId: item.id, module: item.module, status }]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "更新用例状态失败。");
+    } finally {
+      setUpdatingStatusKey("");
+    }
+  }
+
+  async function bulkUpdateVisibleStatus(status: CaseReviewStatus) {
+    if (!selectedRecord || !visibleCases.length) return;
+
+    setBulkUpdatingStatus(status);
+    setError("");
+    try {
+      await updateRunHistoryCaseStatuses(
+        selectedRecord.id,
+        visibleCases.map((item) => ({ caseId: item.id, module: item.module, status })),
+      );
+      setCurrentPage(1);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "批量更新用例状态失败。");
+    } finally {
+      setBulkUpdatingStatus("");
     }
   }
 
@@ -274,6 +425,7 @@ export default function HistoryPage() {
       if (activeId === id) {
         setActiveId("");
         setActiveModule("全部");
+        setActiveReviewStatus("全部");
         setCurrentPage(1);
       }
     } catch (caught) {
@@ -287,6 +439,7 @@ export default function HistoryPage() {
       await clearRunHistory();
       setActiveId("");
       setActiveModule("全部");
+      setActiveReviewStatus("全部");
       setCurrentPage(1);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "清空运行记录失败。");
@@ -296,6 +449,7 @@ export default function HistoryPage() {
   function selectRecord(id: string) {
     setActiveId(id);
     setActiveModule("全部");
+    setActiveReviewStatus("全部");
     setCurrentPage(1);
   }
 
@@ -310,6 +464,16 @@ export default function HistoryPage() {
   function changePageSize(nextPageSize: number) {
     setPageSize(nextPageSize);
     setCurrentPage(1);
+  }
+
+  function selectReviewStatus(status: CaseReviewStatus | "全部") {
+    setActiveReviewStatus(status);
+    setCurrentPage(1);
+  }
+
+  function focusCoverageModule(moduleName: string) {
+    setActiveReviewStatus("全部");
+    selectModule(moduleName);
   }
 
   return (
@@ -350,12 +514,22 @@ export default function HistoryPage() {
             </button>
             <button
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-              disabled={!selectedRecord || isExportingExcel}
+              disabled={!selectedRecord || !allCases.length || isExportingExcel}
               type="button"
-              onClick={exportSelectedExcel}
+              onClick={() => exportCases(allCases, "")}
             >
               {isExportingExcel ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-              导出当前记录
+              导出全部
+            </button>
+            <button
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-emerald-200 bg-white px-3 text-sm font-medium text-emerald-700 transition hover:bg-emerald-50 disabled:cursor-not-allowed disabled:text-emerald-200"
+              disabled={!selectedRecord || !acceptedCases.length || isExportingExcel}
+              title={acceptedCases.length ? `导出 ${acceptedCases.length} 条已采纳用例` : "暂无已采纳用例"}
+              type="button"
+              onClick={() => exportCases(acceptedCases, "已采纳")}
+            >
+              <CheckCheck className="size-4" />
+              导出已采纳 {acceptedCases.length || ""}
             </button>
             <button
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-rose-200 bg-white px-3 text-sm font-medium text-rose-700 transition hover:bg-rose-50 disabled:cursor-not-allowed disabled:text-rose-200"
@@ -633,6 +807,8 @@ export default function HistoryPage() {
                 ) : null}
               </div>
 
+              <CoverageReviewPanel issues={coverageIssues} onSelectModule={focusCoverageModule} />
+
               {visibleCases.length ? (
                 <PaginationControls
                   end={pageEnd}
@@ -679,7 +855,12 @@ export default function HistoryPage() {
                         </div>
                         <div className="grid gap-3">
                           {group.cases.map((item, caseIndex) => (
-                            <HistoryCaseCard key={`${group.moduleName}-${item.id}-${caseIndex}`} item={item} />
+                            <HistoryCaseCard
+                              key={`${group.moduleName}-${item.id}-${caseIndex}`}
+                              item={item}
+                              updating={updatingStatusKey === getCaseIdentity(item)}
+                              onStatusChange={updateCaseStatus}
+                            />
                           ))}
                         </div>
                       </section>
@@ -823,6 +1004,78 @@ export default function HistoryPage() {
                     })}
                   </div>
                 </div>
+
+                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <div className="flex items-start justify-between gap-3">
+                    <div>
+                      <h3 className="font-semibold">状态</h3>
+                      <p className="mt-0.5 text-xs text-slate-500">
+                        当前筛选 {visibleCases.length} / {moduleFilteredCases.length} 条
+                      </p>
+                    </div>
+                    {activeReviewStatus !== "全部" ? (
+                      <button
+                        className="shrink-0 rounded-md px-2 py-1 text-xs font-medium text-slate-600 transition hover:bg-slate-50 hover:text-slate-950"
+                        type="button"
+                        onClick={() => selectReviewStatus("全部")}
+                      >
+                        清除
+                      </button>
+                    ) : null}
+                  </div>
+                  <div className="mt-3 grid gap-1.5">
+                    <button
+                      aria-pressed={activeReviewStatus === "全部"}
+                      className={clsx(
+                        "flex min-h-9 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition",
+                        activeReviewStatus === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                      )}
+                      type="button"
+                      onClick={() => selectReviewStatus("全部")}
+                    >
+                      <span>全部状态</span>
+                      <span className="shrink-0">{moduleFilteredCases.length}</span>
+                    </button>
+                    {caseReviewStatuses.map((status) => (
+                      <button
+                        key={status}
+                        aria-pressed={activeReviewStatus === status}
+                        className={clsx(
+                          "flex min-h-9 w-full items-center justify-between gap-2 rounded-lg px-3 py-2 text-left text-sm transition",
+                          activeReviewStatus === status ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
+                        )}
+                        type="button"
+                        onClick={() => selectReviewStatus(status)}
+                      >
+                        <span className="flex min-w-0 items-center gap-2">
+                          <span className={clsx("size-2 rounded-full ring-1", reviewStatusStyles[status])} />
+                          {status}
+                        </span>
+                        <span className="shrink-0">{reviewStatusCounts[status]}</span>
+                      </button>
+                    ))}
+                  </div>
+                  <div className="mt-3 grid gap-2">
+                    <button
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg bg-emerald-600 px-3 py-2 text-sm font-medium text-white transition hover:bg-emerald-700 disabled:cursor-not-allowed disabled:bg-emerald-200"
+                      disabled={!visibleCases.length || Boolean(bulkUpdatingStatus)}
+                      type="button"
+                      onClick={() => bulkUpdateVisibleStatus("已采纳")}
+                    >
+                      {bulkUpdatingStatus === "已采纳" ? <Loader2 className="size-4 animate-spin" /> : <CheckCheck className="size-4" />}
+                      当前筛选设为已采纳
+                    </button>
+                    <button
+                      className="inline-flex min-h-9 items-center justify-center gap-2 rounded-lg border border-amber-200 bg-white px-3 py-2 text-sm font-medium text-amber-700 transition hover:bg-amber-50 disabled:cursor-not-allowed disabled:text-amber-200"
+                      disabled={!visibleCases.length || Boolean(bulkUpdatingStatus)}
+                      type="button"
+                      onClick={() => bulkUpdateVisibleStatus("需修改")}
+                    >
+                      {bulkUpdatingStatus === "需修改" ? <Loader2 className="size-4 animate-spin" /> : <CircleAlert className="size-4" />}
+                      当前筛选设为需修改
+                    </button>
+                  </div>
+                </div>
               </>
             )}
           </div>
@@ -832,9 +1085,18 @@ export default function HistoryPage() {
   );
 }
 
-function HistoryCaseCard({ item }: { item: TestCase }) {
+function HistoryCaseCard({
+  item,
+  updating,
+  onStatusChange,
+}: {
+  item: TestCase;
+  updating: boolean;
+  onStatusChange: (item: TestCase, status: CaseReviewStatus) => void;
+}) {
   const Icon = categoryIcons[item.category];
   const template = getTemplateCaseFields(item);
+  const reviewStatus = getCaseReviewStatus(item);
 
   return (
     <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -847,6 +1109,7 @@ function HistoryCaseCard({ item }: { item: TestCase }) {
             </span>
             <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">重要程度 {template.priority}</span>
             <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
+            <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", reviewStatusStyles[reviewStatus])}>{reviewStatus}</span>
             <span className="text-xs text-slate-400">{template.id}</span>
           </div>
           <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
@@ -859,6 +1122,22 @@ function HistoryCaseCard({ item }: { item: TestCase }) {
             </p>
           ) : null}
         </div>
+        <label className="flex shrink-0 items-center gap-2 rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-xs font-medium text-slate-500">
+          状态
+          <select
+            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-sm font-medium text-slate-800 outline-none transition focus:border-teal-500 disabled:cursor-wait disabled:text-slate-400"
+            disabled={updating}
+            value={reviewStatus}
+            onChange={(event) => onStatusChange(item, event.target.value as CaseReviewStatus)}
+          >
+            {caseReviewStatuses.map((status) => (
+              <option key={status} value={status}>
+                {status}
+              </option>
+            ))}
+          </select>
+          {updating ? <Loader2 className="size-4 animate-spin text-teal-600" /> : null}
+        </label>
       </div>
 
       <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">

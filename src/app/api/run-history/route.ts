@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { clearRunHistoryRecords, deleteRunHistoryRecord, listRunHistoryRecords, saveRunHistoryRecord } from "@/lib/server/run-history-db";
+import { clearRunHistoryRecords, deleteRunHistoryRecord, listRunHistoryRecords, saveRunHistoryRecord, updateRunHistoryCaseStatuses } from "@/lib/server/run-history-db";
+import { normalizeCaseReviewStatus } from "@/lib/case-review";
 import { normalizeProvider, normalizeThinkingMode } from "@/lib/model-config";
 import type { GenerateResponse, RunStatus } from "@/types/test-case";
 
@@ -20,6 +21,12 @@ type IncomingRecord = {
   errorRaw?: string;
   lastEvent?: unknown;
   result?: GenerateResponse;
+};
+
+type IncomingCaseStatusUpdate = {
+  caseId?: string;
+  module?: string;
+  status?: string;
 };
 
 function normalizeIncomingRecord(record: IncomingRecord) {
@@ -56,6 +63,29 @@ export async function POST(request: NextRequest) {
     .map(saveRunHistoryRecord);
 
   return NextResponse.json({ records: saved });
+}
+
+export async function PATCH(request: NextRequest) {
+  const body = (await request.json().catch(() => null)) as { id?: string; caseUpdates?: IncomingCaseStatusUpdate[] } | null;
+  if (!body?.id) return NextResponse.json({ message: "缺少运行记录 ID。" }, { status: 400 });
+  if (!Array.isArray(body.caseUpdates) || !body.caseUpdates.length) {
+    return NextResponse.json({ message: "缺少要更新的用例状态。" }, { status: 400 });
+  }
+
+  const caseUpdates = body.caseUpdates
+    .filter((item) => item.caseId && item.module)
+    .map((item) => ({
+      caseId: item.caseId as string,
+      module: item.module as string,
+      status: normalizeCaseReviewStatus(item.status),
+    }));
+
+  if (!caseUpdates.length) return NextResponse.json({ message: "用例状态更新内容无效。" }, { status: 400 });
+
+  const record = updateRunHistoryCaseStatuses(body.id, caseUpdates);
+  if (!record) return NextResponse.json({ message: "未找到对应运行记录。" }, { status: 404 });
+
+  return NextResponse.json({ record });
 }
 
 export async function DELETE(request: NextRequest) {
