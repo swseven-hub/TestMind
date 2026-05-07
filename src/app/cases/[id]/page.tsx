@@ -12,6 +12,7 @@ import {
   Clock3,
   Download,
   FileText,
+  History,
   ListChecks,
   Loader2,
   Search,
@@ -339,39 +340,44 @@ export default function CaseDetailPage() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f6f8fb] text-slate-950">
-      <section className="border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
-        <div className="mx-auto flex max-w-[1600px] flex-col gap-3 px-5 py-4 sm:px-8 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex min-w-0 items-center gap-3">
-            <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
-              <ListChecks className="size-5" />
+    <main className="h-screen overflow-hidden bg-[#f6f8fb] text-slate-950">
+      <div className="flex h-full min-h-0 w-full flex-col">
+        <section className="shrink-0 border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
+          <div className="flex min-h-[72px] flex-col gap-3 px-4 py-3 sm:px-5 lg:h-[72px] lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex min-w-0 items-center gap-3">
+              <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
+                <ListChecks className="size-5" />
+              </div>
+              <div className="min-w-0">
+                <h1 className="truncate text-lg font-semibold sm:text-xl">测试点详情</h1>
+                <p className="truncate text-sm text-slate-500">{result?.fileName ?? "正在读取运行记录"}</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h1 className="truncate text-xl font-semibold">测试点详情</h1>
-              <p className="truncate text-sm text-slate-500">{result?.fileName ?? "正在读取运行记录"}</p>
+            <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
+              <Link className="inline-flex h-10 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto" href="/history">
+                <History className="size-4" />
+                运行记录
+              </Link>
+              <Link className="inline-flex h-10 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto" href="/">
+                <ArrowLeft className="size-4" />
+                返回工作台
+              </Link>
+              <button
+                className="inline-flex h-10 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300 sm:w-auto"
+                disabled={!result || isExporting}
+                type="button"
+                onClick={exportExcel}
+              >
+                {isExporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
+                Excel
+              </button>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
-            <Link className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50" href="/">
-              <ArrowLeft className="size-4" />
-              返回工作台
-            </Link>
-            <button
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-              disabled={!result || isExporting}
-              type="button"
-              onClick={exportExcel}
-            >
-              {isExporting ? <Loader2 className="size-4 animate-spin" /> : <Download className="size-4" />}
-              Excel
-            </button>
-          </div>
-        </div>
-      </section>
+        </section>
 
-      <section className="mx-auto grid max-w-[1600px] gap-5 px-5 py-5 sm:px-8 lg:grid-cols-[320px_minmax(0,1fr)]">
-        <aside className="min-w-0">
-          <div className="sticky top-5 space-y-3">
+        <section className="grid min-h-0 flex-1 grid-rows-[auto_minmax(0,1fr)] gap-3 overflow-hidden px-3 py-3 sm:px-4 lg:grid-cols-[280px_minmax(0,1fr)] lg:grid-rows-1 xl:grid-cols-[300px_minmax(0,1fr)]">
+          <aside className="min-h-0 min-w-0 overflow-y-auto pr-1">
+            <div className="space-y-3">
             <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
               <h2 className="font-semibold">目录</h2>
               <p className="mt-1 text-xs leading-5 text-slate-500">点击模块查看对应测试点。</p>
@@ -444,17 +450,17 @@ export default function CaseDetailPage() {
           </div>
         </aside>
 
-        <section className="min-w-0 space-y-4">
+          <section className="min-h-0 min-w-0 space-y-3 overflow-y-auto pr-1">
           {result ? (
             <>
-              <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <div className="flex flex-col gap-4 xl:flex-row xl:items-start xl:justify-between">
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
                   <div className="min-w-0">
                     <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
                       <FileText className="size-4" />
                       生成报告
                     </div>
-                    <h2 className="mt-2 text-2xl font-semibold tracking-normal">{result.fileName}</h2>
+                    <h2 className="mt-2 text-xl font-semibold tracking-normal">{result.fileName}</h2>
                     <p className="mt-1 break-words text-sm leading-6 text-slate-500">{result.summary}</p>
                   </div>
                   <div className="grid grid-cols-2 gap-2 text-sm sm:grid-cols-4">
@@ -489,7 +495,7 @@ export default function CaseDetailPage() {
                 </div>
               </div>
 
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
                   <label className="relative block min-w-0 flex-1">
                     <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
@@ -523,7 +529,7 @@ export default function CaseDetailPage() {
               />
 
               {groupedCases.length ? (
-                <div className="grid gap-5">
+                <div className="grid gap-4">
                   {groupedCases.map((group) => (
                     <section key={group.moduleName} className="space-y-3">
                       <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
@@ -572,7 +578,7 @@ export default function CaseDetailPage() {
               />
             </>
           ) : (
-            <div className="grid min-h-[520px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+            <div className="grid min-h-[320px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
               <div className="max-w-md">
                 <div className="mx-auto grid size-14 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200">
                   <Clock3 className="size-7" />
@@ -582,8 +588,9 @@ export default function CaseDetailPage() {
               </div>
             </div>
           )}
+          </section>
         </section>
-      </section>
+      </div>
     </main>
   );
 }
