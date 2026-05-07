@@ -160,8 +160,11 @@ function useStoredProvider() {
   return normalizeProvider(useStoredValue(storageKeys.provider, "deepseek"));
 }
 
-function subscribeClientReady() {
-  return () => {};
+function subscribeClientReady(callback: () => void) {
+  if (typeof window === "undefined") return () => {};
+
+  const timeoutId = window.setTimeout(callback, 0);
+  return () => window.clearTimeout(timeoutId);
 }
 
 function useClientReady() {
@@ -439,26 +442,26 @@ function GenerationProgressModal({
 
 function ApiKeyConfigSkeleton() {
   return (
-    <div className="mt-4 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
       <div className="flex items-center justify-between gap-3">
         <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
           <KeyRound className="size-4 text-teal-700" />
-          API Key
+          密钥与模型
         </div>
-        <span className="h-6 w-20 animate-pulse rounded-full bg-white ring-1 ring-slate-200" />
+        <span className="h-6 w-20 animate-pulse rounded-full bg-slate-100" />
       </div>
-      <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-white p-1 ring-1 ring-slate-200">
-        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
-        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
-        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
-        <span className="h-8 animate-pulse rounded-md bg-slate-100" />
+      <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
+        <span className="h-8 animate-pulse rounded-md bg-white" />
+        <span className="h-8 animate-pulse rounded-md bg-white" />
+        <span className="h-8 animate-pulse rounded-md bg-white" />
+        <span className="h-8 animate-pulse rounded-md bg-white" />
       </div>
-      <div className="mt-3 h-10 animate-pulse rounded-lg bg-white ring-1 ring-slate-200" />
+      <div className="mt-3 h-10 animate-pulse rounded-lg bg-slate-50 ring-1 ring-slate-200" />
       <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="h-5 w-28 animate-pulse rounded-md bg-white ring-1 ring-slate-100" />
-        <span className="h-5 w-14 animate-pulse rounded-md bg-white ring-1 ring-slate-100" />
+        <span className="h-5 w-28 animate-pulse rounded-md bg-slate-50" />
+        <span className="h-5 w-14 animate-pulse rounded-md bg-slate-50" />
       </div>
-      <div className="mt-3 h-10 animate-pulse rounded-lg bg-white ring-1 ring-slate-200" />
+      <div className="mt-3 h-10 animate-pulse rounded-lg bg-slate-50 ring-1 ring-slate-200" />
     </div>
   );
 }
@@ -467,7 +470,7 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
   const moduleCount = new Set(demoGenerateResponse.cases.map((item) => item.module)).size;
 
   return (
-    <div className="rounded-lg border border-teal-200 bg-white p-5 shadow-sm">
+    <div className="rounded-lg border border-teal-200 bg-teal-50/70 p-4 shadow-sm">
       <div className="flex items-start justify-between gap-3">
         <div>
           <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
@@ -475,27 +478,27 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
             快速体验
           </div>
           <h2 className="mt-2 text-lg font-semibold tracking-normal">内嵌示例 PRD</h2>
-          <p className="mt-1 text-sm leading-6 text-slate-500">不用上传 PDF，也不用填写 API Key，先看一份完整示例的生成效果。</p>
+          <p className="mt-1 text-sm leading-6 text-slate-600">不用上传 PDF 和 API Key，直接查看完整生成效果。</p>
         </div>
-        <span className="shrink-0 rounded-full bg-teal-50 px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+        <span className="shrink-0 rounded-full bg-white px-2.5 py-1 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
           {demoGenerateResponse.cases.length} 条
         </span>
       </div>
 
-      <div className="mt-4 grid grid-cols-2 border-y border-slate-200 py-3 text-sm">
+      <div className="mt-4 grid grid-cols-2 border-y border-teal-200/70 py-3 text-sm">
         <div>
-          <p className="text-xs text-slate-400">模块</p>
+          <p className="text-xs text-teal-700/70">模块</p>
           <p className="mt-1 font-semibold text-slate-800">{moduleCount} 个</p>
         </div>
-        <div className="border-l border-slate-200 pl-4">
-          <p className="text-xs text-slate-400">覆盖类型</p>
+        <div className="border-l border-teal-200/70 pl-4">
+          <p className="text-xs text-teal-700/70">覆盖类型</p>
           <p className="mt-1 font-semibold text-slate-800">5 类</p>
         </div>
       </div>
 
       <div className="mt-4 space-y-2">
         {demoPrdHighlights.slice(0, 3).map((item) => (
-          <div key={item} className="grid grid-cols-[20px_1fr] gap-2 text-sm leading-6 text-slate-600">
+          <div key={item} className="grid grid-cols-[20px_1fr] gap-2 text-sm leading-6 text-slate-700">
             <ListChecks className="mt-1 size-4 text-teal-600" />
             <span>{item}</span>
           </div>
@@ -517,11 +520,11 @@ function DemoExperienceCard({ active, onLoad }: { active: boolean; onLoad: () =>
 function RunHistoryEntryCard({ count }: { count: number }) {
   return (
     <Link
-      className="group flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-slate-300 hover:bg-slate-50"
+      className="group flex min-h-14 items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-left shadow-sm transition hover:border-teal-200 hover:bg-teal-50/40"
       href="/history"
     >
       <span className="flex min-w-0 items-center gap-3">
-        <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white">
+        <span className="grid size-9 shrink-0 place-items-center rounded-lg bg-slate-950 text-white">
           <Database className="size-4" />
         </span>
         <span className="min-w-0">
@@ -622,23 +625,22 @@ function AliyunModelConfig({
         onChange={onModelChange}
       />
 
-      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               {selected.name}
               <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
           </div>
         </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
         <p className="mt-2 text-xs leading-5 text-slate-400">
           参考单价：输入 ¥{selected.pricing.inputPerMTokens}/百万 Token，输出 ¥{outputPrice}/百万 Token，以阿里云账单为准。
         </p>
       </div>
 
-      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
         <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
           <Brain className="size-4 text-teal-700" />
           生成模式
@@ -681,17 +683,16 @@ function DeepSeekModelConfig({ model, onModelChange }: { model: string; onModelC
         onChange={onModelChange}
       />
 
-      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               {selected.name}
               <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
           </div>
         </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
         <p className="mt-2 text-xs leading-5 text-slate-400">
           参考单价：输入缓存命中 ¥{selected.pricing.inputCacheHitPerMTokens}/百万 Token，输入未命中 ¥{selected.pricing.inputCacheMissPerMTokens}/百万 Token，输出 ¥{selected.pricing.outputPerMTokens}/百万 Token。
         </p>
@@ -722,17 +723,16 @@ function OpenAIModelConfig({ model, onModelChange }: { model: string; onModelCha
         onChange={onModelChange}
       />
 
-      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               {selected.name}
               <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
           </div>
         </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
         <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
       </div>
     </div>
@@ -747,7 +747,7 @@ function ReasoningEffortConfig({
   onReasoningEffortChange: (value: ReasoningEffort) => void;
 }) {
   return (
-    <div className="mt-3 rounded-lg bg-white p-3 ring-1 ring-slate-200">
+    <div className="mt-3 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
       <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
         <Brain className="size-4 text-teal-700" />
         推理等级
@@ -808,17 +808,16 @@ function VelotricGatewayConfig({
         onChange={onModelChange}
       />
 
-      <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
               {selected.name}
               <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
             </div>
-            <p className="mt-1 text-xs leading-5 text-slate-500">{selected.description}</p>
           </div>
         </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">适合：{selected.suitableFor}</p>
+        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
         <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
       </div>
     </div>
@@ -1258,7 +1257,7 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen bg-[#f7f4ef] text-slate-950">
+    <main className="min-h-screen bg-[#f6f8fb] text-slate-950">
       <GenerationProgressModal
         elapsedMs={elapsedMs}
         error={progressError}
@@ -1287,31 +1286,40 @@ export default function Home() {
         </button>
       ) : null}
 
-      <section className="border-b border-slate-200/80 bg-white/80 backdrop-blur">
-        <div className="mx-auto flex max-w-7xl items-center justify-between px-5 py-4 sm:px-8">
+      <section className="border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
+        <div className="mx-auto flex max-w-[1440px] items-center justify-between px-5 py-4 sm:px-8">
           <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white shadow-sm">
+            <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
               <Bot className="size-5" />
             </div>
             <div>
               <h1 className="text-xl font-semibold">TestMind</h1>
-              <p className="text-sm text-slate-500">PRD to Test Cases</p>
+              <p className="text-sm text-slate-500">需求文档转测试用例</p>
             </div>
           </div>
-          <div className="hidden items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1.5 text-sm text-slate-600 sm:flex">
+          <div className="hidden items-center gap-2 rounded-full border border-teal-200 bg-teal-50 px-3 py-1.5 text-sm font-medium text-teal-800 sm:flex">
             <Sparkles className="size-4 text-teal-600" />
             {sourceLabel}
           </div>
         </div>
       </section>
 
-      <section className="mx-auto grid max-w-7xl gap-6 px-5 py-6 sm:px-8 lg:grid-cols-[390px_minmax(0,1fr)]">
-        <aside className="space-y-4">
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <section className="mx-auto grid max-w-[1440px] gap-5 px-5 py-5 sm:px-8 lg:grid-cols-[370px_minmax(0,1fr)]">
+        <aside className="space-y-3">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="mb-4 flex items-center justify-between gap-3">
+              <div>
+                <h2 className="text-base font-semibold text-slate-900">生成配置</h2>
+                <p className="mt-0.5 text-xs text-slate-500">上传 PRD，配置模型后生成测试用例。</p>
+              </div>
+              <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                PDF
+              </span>
+            </div>
             <div
               className={clsx(
-                "group grid min-h-56 cursor-pointer place-items-center rounded-lg border border-dashed p-6 text-center transition",
-                isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50 hover:border-slate-400",
+                "group grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
+                isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
               )}
               onClick={() => inputRef.current?.click()}
               onDragOver={(event) => {
@@ -1333,24 +1341,24 @@ export default function Home() {
                 onChange={(event) => pickFile(event.target.files?.[0])}
               />
               <div className="space-y-4">
-                <div className="mx-auto grid size-14 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200">
-                  <UploadCloud className="size-7" />
+                <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
+                  <UploadCloud className="size-6" />
                 </div>
                 <div>
-                  <p className="font-medium">{file ? file.name : "上传 PRD PDF"}</p>
+                  <p className="break-words font-semibold">{file ? file.name : "上传 PRD PDF"}</p>
                   <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
                 </div>
               </div>
             </div>
 
             {isClientReady ? (
-              <div className="mt-4 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
                     <KeyRound className="size-4 text-teal-700" />
-                    API Key
+                    密钥与模型
                   </div>
-                  <span className="rounded-full bg-white px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
+                  <span className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
                     {providerLabels[provider]}
                   </span>
                 </div>
@@ -1447,7 +1455,7 @@ export default function Home() {
             )}
 
             <button
-              className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+              className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
               disabled={!isClientReady}
               onClick={generate}
             >
@@ -1467,16 +1475,16 @@ export default function Home() {
 
           <RunHistoryEntryCard count={runHistory.length} />
 
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">模块</h2>
               <span className="text-sm text-slate-500">{result?.cases.length ?? 0} 条</span>
             </div>
-            <div className="mt-4 grid gap-2">
+            <div className="mt-3 grid gap-1.5">
               <button
                 className={clsx(
-                  "flex h-10 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
-                  activeModule === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
+                  "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
+                  activeModule === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
                 )}
                 onClick={() => setActiveModule("全部")}
               >
@@ -1487,8 +1495,8 @@ export default function Home() {
                 <button
                   key={moduleName}
                   className={clsx(
-                    "flex min-h-10 w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
-                    activeModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
+                    "flex min-h-9 w-full max-w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
+                    activeModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
                   )}
                   onClick={() => setActiveModule(moduleName)}
                 >
@@ -1499,16 +1507,16 @@ export default function Home() {
             </div>
           </div>
 
-          <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="flex items-center justify-between">
               <h2 className="font-semibold">类型</h2>
               <span className="max-w-40 truncate text-sm text-slate-500">{activeModule}</span>
             </div>
-            <div className="mt-4 grid gap-2">
+            <div className="mt-3 grid gap-1.5">
               <button
                 className={clsx(
-                  "flex h-10 items-center justify-between rounded-lg px-3 text-sm transition",
-                  activeCategory === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
+                  "flex h-9 items-center justify-between rounded-lg px-3 text-sm transition",
+                  activeCategory === "全部" ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
                 )}
                 onClick={() => setActiveCategory("全部")}
               >
@@ -1520,9 +1528,9 @@ export default function Home() {
                 return (
                   <button
                     key={category}
-                  className={clsx(
-                      "flex h-10 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
-                      activeCategory === category ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-slate-100",
+                    className={clsx(
+                      "flex h-9 w-full max-w-full items-center justify-between rounded-lg px-3 text-sm transition",
+                      activeCategory === category ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
                     )}
                     onClick={() => setActiveCategory(category)}
                   >
@@ -1544,6 +1552,14 @@ export default function Home() {
               <div className="min-w-0">
                 <h2 className="text-2xl font-semibold tracking-normal">测试用例</h2>
                 <p className="mt-1 break-words text-sm text-slate-500">{result?.summary ?? "等待 PRD 解析"}</p>
+                <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                  <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
+                    当前可见 {visibleCases.length} 条
+                  </span>
+                  <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">
+                    {sourceLabel}
+                  </span>
+                </div>
               </div>
               <div className="flex flex-col gap-2 sm:flex-row">
                 <label className="relative block">
@@ -1581,9 +1597,9 @@ export default function Home() {
             <div className="grid gap-5">
               {groupedCases.map((group, groupIndex) => (
                 <section key={`${group.moduleName}-${groupIndex}`} className="space-y-3">
-                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-5 py-4 shadow-sm">
+                  <div className="flex flex-wrap items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 shadow-sm">
                     <div>
-                        <h3 className="break-words text-lg font-semibold">{group.moduleName}</h3>
+                      <h3 className="break-words text-lg font-semibold">{group.moduleName}</h3>
                       <p className="mt-1 text-sm text-slate-500">{group.cases.length} 条测试用例</p>
                     </div>
                     <div className="flex flex-wrap gap-2">
@@ -1607,15 +1623,33 @@ export default function Home() {
               ))}
             </div>
           ) : (
-            <div className="grid min-h-96 place-items-center rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
-              <div className="max-w-md">
-                <div className="mx-auto grid size-14 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200">
+            <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+              <div className="w-full max-w-2xl">
+                <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
                   <FileText className="size-7" />
                 </div>
-                <p className="mt-4 font-medium text-slate-700">暂无用例</p>
-                <p className="mt-2 text-sm leading-6 text-slate-500">可以先加载内嵌示例，快速体验模块筛选、类型筛选、搜索和导出效果。</p>
+                <p className="mt-4 text-lg font-semibold text-slate-800">还没有生成测试用例</p>
+                <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">
+                  从左侧上传 PRD、确认模型配置后开始生成；也可以先加载演示案例，快速查看筛选、覆盖蓝图和 Excel 导出效果。
+                </p>
+                <div className="mt-6 grid gap-3 text-left sm:grid-cols-3">
+                  {[
+                    { icon: UploadCloud, title: "上传 PRD", desc: file ? "已选择文档" : "支持 PDF 文本层" },
+                    { icon: KeyRound, title: "配置模型", desc: apiKey.trim() ? "密钥已就绪" : "可使用本地兜底" },
+                    { icon: Sparkles, title: "生成用例", desc: "按模块覆盖缺口" },
+                  ].map((item) => {
+                    const Icon = item.icon;
+                    return (
+                      <div key={item.title} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                        <Icon className="size-4 text-teal-700" />
+                        <p className="mt-2 text-sm font-semibold text-slate-800">{item.title}</p>
+                        <p className="mt-1 text-xs text-slate-500">{item.desc}</p>
+                      </div>
+                    );
+                  })}
+                </div>
                 <button
-                  className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
+                  className="mt-6 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800"
                   type="button"
                   onClick={loadDemoCase}
                 >
@@ -1649,7 +1683,7 @@ function CaseCard({ item }: { item: TestCase }) {
   ];
 
   return (
-    <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+    <article className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 sm:flex-row sm:items-start sm:justify-between">
         <div className="min-w-0">
           <div className="flex flex-wrap items-center gap-2">
@@ -1661,7 +1695,7 @@ function CaseCard({ item }: { item: TestCase }) {
             <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
             <span className="text-xs text-slate-400">{template.id}</span>
           </div>
-          <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
+          <h3 className="mt-3 text-base font-semibold leading-snug text-slate-900">{item.title}</h3>
           <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
           {item.testPoint || item.evidence ? (
             <p className="mt-2 break-words text-sm leading-6 text-slate-500">
@@ -1682,7 +1716,7 @@ function CaseCard({ item }: { item: TestCase }) {
         ))}
       </div>
 
-      <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">
+      <div className="mt-3 grid gap-3 xl:grid-cols-[1fr_1.2fr_1fr]">
         <div className="rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
           <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
