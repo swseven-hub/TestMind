@@ -1,4 +1,5 @@
 import OpenAI from "openai";
+import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { NextResponse } from "next/server";
 import {
@@ -58,6 +59,45 @@ type AnalyzeRequest = {
   thinkingMode?: string;
   reasoningEffort?: string;
 };
+
+async function extractPdfText(file: File) {
+  const data = new Uint8Array(await file.arrayBuffer());
+  const parser = new PDFParse({ data });
+
+  try {
+    const parsed = await parser.getText();
+    return parsed.text.trim();
+  } finally {
+    await parser.destroy();
+  }
+}
+
+async function readAnalyzeRequest(request: Request) {
+  const contentType = request.headers.get("content-type") ?? "";
+
+  if (contentType.includes("multipart/form-data")) {
+    const formData = await request.formData();
+    const fileValue = formData.get("file");
+    return {
+      body: {
+        agent: String(formData.get("agent") ?? ""),
+        input: String(formData.get("input") ?? ""),
+        provider: String(formData.get("provider") ?? ""),
+        model: String(formData.get("model") ?? ""),
+        apiKey: String(formData.get("apiKey") ?? ""),
+        baseURL: String(formData.get("baseURL") ?? ""),
+        thinkingMode: String(formData.get("thinkingMode") ?? ""),
+        reasoningEffort: String(formData.get("reasoningEffort") ?? ""),
+      } satisfies AnalyzeRequest,
+      file: fileValue instanceof File ? fileValue : null,
+    };
+  }
+
+  return {
+    body: (await request.json()) as AnalyzeRequest,
+    file: null,
+  };
+}
 
 function parseJsonObject<T>(content: string): T {
   const trimmed = content.trim();
@@ -160,12 +200,29 @@ export async function POST(request: Request) {
   const startedAt = Date.now();
 
   try {
-    const body = (await request.json()) as AnalyzeRequest;
+    const { body, file } = await readAnalyzeRequest(request);
     const agent = normalizeAnalysisAgent(body.agent ?? "");
-    const input = String(body.input ?? "").trim();
+    let input = String(body.input ?? "").trim();
 
-    if (input.length < 20) {
-      return NextResponse.json({ message: "请输入至少 20 个字符的分析材料。" }, { status: 400 });
+    if (agent === "requirement-review") {
+      if (!(file instanceof File)) {
+        return NextResponse.json({ message: "需求评审智能体请上传 PRD PDF。" }, { status: 400 });
+      }
+
+      if (file.type !== "application/pdf" && !file.name.toLowerCase().endsWith(".pdf")) {
+        return NextResponse.json({ message: "需求评审智能体仅支持 PDF 文件。" }, { status: 400 });
+      }
+
+      if (file.size > 15 * 1024 * 1024) {
+        return NextResponse.json({ message: "PDF 文件不能超过 15MB。" }, { status: 400 });
+      }
+
+      input = await extractPdfText(file);
+      if (!input || input.length < 30) {
+        return NextResponse.json({ message: "未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。" }, { status: 422 });
+      }
+    } else if (input.length < 20) {
+      return NextResponse.json({ message: "请输入至少 20 个字符的发布材料。" }, { status: 400 });
     }
 
     if (input.length > 80_000) {

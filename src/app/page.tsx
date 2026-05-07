@@ -148,10 +148,10 @@ const agentOptions: Array<{
     value: "requirement-review",
     label: "需求评审智能体",
     shortLabel: "评审",
-    description: "提炼疑点、边界、异常、权限和测试风险。",
+    description: "上传 PRD PDF，提炼疑点、边界、异常、权限和测试风险。",
     icon: Brain,
-    actionLabel: "开始需求评审",
-    placeholder: "粘贴 PRD 片段、需求说明、评审纪要或产品变更描述。",
+    actionLabel: "评审 PRD PDF",
+    placeholder: "",
   },
   {
     value: "case-generator",
@@ -1080,6 +1080,52 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
   );
 }
 
+function PdfUploadDropzone({
+  emptyLabel,
+  file,
+  isDragging,
+  onClick,
+  onDragChange,
+  onPick,
+}: {
+  emptyLabel: string;
+  file: File | null;
+  isDragging: boolean;
+  onClick: () => void;
+  onDragChange: (value: boolean) => void;
+  onPick: (file?: File) => void;
+}) {
+  return (
+    <div
+      className={clsx(
+        "group mt-4 grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
+        isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
+      )}
+      onClick={onClick}
+      onDragOver={(event) => {
+        event.preventDefault();
+        onDragChange(true);
+      }}
+      onDragLeave={() => onDragChange(false)}
+      onDrop={(event) => {
+        event.preventDefault();
+        onDragChange(false);
+        onPick(event.dataTransfer.files[0]);
+      }}
+    >
+      <div className="space-y-4">
+        <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
+          <UploadCloud className="size-6" />
+        </div>
+        <div>
+          <p className="break-words font-semibold">{file ? file.name : emptyLabel}</p>
+          <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function AgentSwitcher({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
   return (
     <div className="grid gap-2">
@@ -1305,14 +1351,17 @@ function moduleSectionId(moduleName: string) {
 
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
+  const reviewInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingScrollModuleRef = useRef<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
+  const [reviewFile, setReviewFile] = useState<File | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
   const [activeModule, setActiveModule] = useState("全部");
   const [activeCategory, setActiveCategory] = useState<TestCategory | "全部">("全部");
   const [query, setQuery] = useState("");
   const [isDragging, setIsDragging] = useState(false);
+  const [isReviewDragging, setIsReviewDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
@@ -1351,6 +1400,7 @@ export default function Home() {
   const isDemoResult = result?.source === "demo";
   const currentAgentOption = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
   const analysisMode = isAnalysisAgent(activeAgent);
+  const reviewMode = activeAgent === "requirement-review";
   const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "待生成";
   const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
@@ -1461,6 +1511,13 @@ export default function Home() {
     setFile(nextFile);
   }
 
+  function pickReviewFile(nextFile?: File) {
+    if (!nextFile) return;
+    setAgentError("");
+    setAgentResult(null);
+    setReviewFile(nextFile);
+  }
+
   function clearSavedApiKey() {
     writeStoredValue(apiKeyStorageKey(provider), "");
   }
@@ -1501,19 +1558,44 @@ export default function Home() {
       return;
     }
 
-    const input = agentInput.trim();
-    if (input.length < 20) {
-      setAgentError("请输入至少 20 个字符的分析材料。");
-      return;
-    }
-
     setIsAgentRunning(true);
     setAgentError("");
     try {
-      const response = await fetch("/api/agents/analyze", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
+      let response: Response;
+
+      if (activeAgent === "requirement-review") {
+        if (!reviewFile) {
+          setAgentError("请上传 PRD PDF。");
+          setIsAgentRunning(false);
+          return;
+        }
+
+        const formData = new FormData();
+        formData.append("agent", activeAgent);
+        formData.append("file", reviewFile);
+        formData.append("provider", provider);
+        formData.append("model", model.trim() || providerModels[provider]);
+        formData.append("thinkingMode", thinkingMode);
+        formData.append("reasoningEffort", reasoningEffort);
+        if (apiKey.trim()) formData.append("apiKey", apiKey.trim());
+        if (provider === "velotric") formData.append("baseURL", baseURL.trim() || providerBaseURLs.velotric || "");
+
+        response = await fetch("/api/agents/analyze", {
+          method: "POST",
+          body: formData,
+        });
+      } else {
+        const input = agentInput.trim();
+        if (input.length < 20) {
+          setAgentError("请输入至少 20 个字符的发布材料。");
+          setIsAgentRunning(false);
+          return;
+        }
+
+        response = await fetch("/api/agents/analyze", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({
           agent: activeAgent,
           input,
           provider,
@@ -1522,8 +1604,9 @@ export default function Home() {
           thinkingMode,
           reasoningEffort,
           ...(provider === "velotric" ? { baseURL: baseURL.trim() || providerBaseURLs.velotric || "" } : {}),
-        }),
-      });
+          }),
+        });
+      }
 
       const payload = (await response.json().catch(() => null)) as AgentAnalysisResponse | { message?: string } | null;
       if (!response.ok) {
@@ -1830,6 +1913,13 @@ export default function Home() {
             accept="application/pdf,.pdf"
             onChange={(event) => pickFile(event.target.files?.[0])}
           />
+          <input
+            ref={reviewInputRef}
+            hidden
+            type="file"
+            accept="application/pdf,.pdf"
+            onChange={(event) => pickReviewFile(event.target.files?.[0])}
+          />
           {leftRailCollapsed ? (
             <div className="sticky top-5 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
               <div className="flex items-center justify-center gap-2 lg:flex-col">
@@ -1860,7 +1950,20 @@ export default function Home() {
                     </button>
                   );
                 })}
-                {!analysisMode ? (
+                {reviewMode ? (
+                  <button
+                    aria-label="上传需求评审 PRD"
+                    className={clsx(
+                      "grid size-11 place-items-center rounded-lg border transition",
+                      reviewFile ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                    )}
+                    title={reviewFile ? reviewFile.name : "上传需求评审 PRD"}
+                    type="button"
+                    onClick={() => reviewInputRef.current?.click()}
+                  >
+                    <UploadCloud className="size-4" />
+                  </button>
+                ) : !analysisMode ? (
                   <button
                     aria-label="上传 PRD"
                     className={clsx(
@@ -1910,7 +2013,7 @@ export default function Home() {
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  {analysisMode ? "文本" : "PDF"}
+                  {activeAgent === "release-risk" ? "文本" : "PDF"}
                 </span>
                 <button
                   aria-label="收起生成配置"
@@ -1925,37 +2028,27 @@ export default function Home() {
             </div>
             <AgentSwitcher value={activeAgent} onChange={selectAgent} />
 
-            {!analysisMode ? (
-              <div
-                className={clsx(
-                  "group mt-4 grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
-                  isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
-                )}
+            {reviewMode ? (
+              <PdfUploadDropzone
+                emptyLabel="上传 PRD PDF"
+                file={reviewFile}
+                isDragging={isReviewDragging}
+                onClick={() => reviewInputRef.current?.click()}
+                onDragChange={setIsReviewDragging}
+                onPick={pickReviewFile}
+              />
+            ) : !analysisMode ? (
+              <PdfUploadDropzone
+                emptyLabel="上传 PRD PDF"
+                file={file}
+                isDragging={isDragging}
                 onClick={() => inputRef.current?.click()}
-                onDragOver={(event) => {
-                  event.preventDefault();
-                  setIsDragging(true);
-                }}
-                onDragLeave={() => setIsDragging(false)}
-                onDrop={(event) => {
-                  event.preventDefault();
-                  setIsDragging(false);
-                  pickFile(event.dataTransfer.files[0]);
-                }}
-              >
-                <div className="space-y-4">
-                  <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
-                    <UploadCloud className="size-6" />
-                  </div>
-                  <div>
-                    <p className="break-words font-semibold">{file ? file.name : "上传 PRD PDF"}</p>
-                    <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
-                  </div>
-                </div>
-              </div>
+                onDragChange={setIsDragging}
+                onPick={pickFile}
+              />
             ) : (
               <label className="mt-4 block">
-                <span className="text-xs font-medium text-slate-500">分析材料</span>
+                <span className="text-xs font-medium text-slate-500">发布材料</span>
                 <textarea
                   className="mt-1 min-h-64 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
                   placeholder={currentAgentOption.placeholder}
