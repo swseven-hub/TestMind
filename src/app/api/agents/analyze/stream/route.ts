@@ -145,6 +145,32 @@ function createClient(provider: Provider, apiKey: string, baseURL?: string) {
   });
 }
 
+function getTextInputError(agent: TestAgentAnalysisType) {
+  if (agent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
+  if (agent === "debug-assistant") return "请输入至少 20 个字符的日志、堆栈或请求材料。";
+  return "请输入至少 20 个字符的发布材料。";
+}
+
+function getTextInputStageMessage(agent: TestAgentAnalysisType) {
+  if (agent === "change-impact") return "已读取 git diff / PR 材料";
+  if (agent === "debug-assistant") return "已读取 Bug 现场材料";
+  return "已读取发布材料";
+}
+
+function getThinkingDetail(agent: TestAgentAnalysisType) {
+  if (agent === "requirement-review") return "正在识别需求疑点、边界、异常和权限风险。";
+  if (agent === "change-impact") return "正在识别改动影响、接口风险和重点回归范围。";
+  if (agent === "debug-assistant") return "正在定位疑似根因、涉及模块和可疑变更。";
+  return "正在判断回归范围、冒烟清单和上线风险。";
+}
+
+function getAiStageMessage(agent: TestAgentAnalysisType) {
+  if (agent === "requirement-review") return "AI 正在评审需求";
+  if (agent === "change-impact") return "AI 正在分析变更影响";
+  if (agent === "debug-assistant") return "AI 正在分析 Bug 根因";
+  return "AI 正在分析发布风险";
+}
+
 function withStats({
   agent,
   input,
@@ -236,12 +262,7 @@ async function streamAnalyzeWithModel({
         onEvent({
           type: "thinking",
           message: "模型正在思考",
-          detail:
-            agent === "requirement-review"
-              ? "正在识别需求疑点、边界、异常和权限风险。"
-              : agent === "change-impact"
-                ? "正在识别改动影响、接口风险和重点回归范围。"
-                : "正在判断回归范围、冒烟清单和上线风险。",
+          detail: getThinkingDetail(agent),
         });
       }
     }
@@ -302,10 +323,10 @@ export async function POST(request: Request) {
               detail: `提取 ${input.length.toLocaleString("zh-CN")} 个字符，准备进入需求评审。`,
             });
           } else {
-            if (input.length < 20) throw new Error(agent === "change-impact" ? "请输入至少 20 个字符的 git diff 或 PR 材料。" : "请输入至少 20 个字符的发布材料。");
+            if (input.length < 20) throw new Error(getTextInputError(agent));
             onEvent({
               type: "stage",
-              message: agent === "change-impact" ? "已读取 git diff / PR 材料" : "已读取发布材料",
+              message: getTextInputStageMessage(agent),
               detail: `共 ${input.length.toLocaleString("zh-CN")} 个字符。`,
             });
           }
@@ -340,7 +361,7 @@ export async function POST(request: Request) {
           } else {
             onEvent({
               type: "stage",
-              message: agent === "requirement-review" ? "AI 正在评审需求" : agent === "change-impact" ? "AI 正在分析变更影响" : "AI 正在分析发布风险",
+              message: getAiStageMessage(agent),
               detail: "模型会流式返回结构化 JSON，可在右侧查看实时输出。",
             });
             result = await streamAnalyzeWithModel({

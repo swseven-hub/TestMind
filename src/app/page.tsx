@@ -181,6 +181,15 @@ const agentOptions: Array<{
     actionLabel: "分析变更影响",
     placeholder: "粘贴 git diff、PR 描述、提交记录，或变更文件列表。可附上历史缺陷/事故摘要。",
   },
+  {
+    value: "debug-assistant",
+    label: "Bug 根因智能体",
+    shortLabel: "Debug",
+    description: "分析日志、堆栈、请求和 diff，定位疑似根因与修复方向。",
+    icon: Terminal,
+    actionLabel: "分析 Bug 根因",
+    placeholder: "粘贴 stacktrace、error log、request、response、traceId、git diff、commit 记录或复现步骤。",
+  },
 ];
 
 function apiKeyStorageKey(provider: Provider) {
@@ -247,6 +256,22 @@ function useStoredAgent() {
 
 function isAnalysisAgent(agent: TestAgentType): agent is TestAgentAnalysisType {
   return agent !== "case-generator";
+}
+
+function agentInputKind(agent: TestAgentType) {
+  return agent === "requirement-review" || agent === "case-generator" ? "PDF" : "文本";
+}
+
+function agentModeLabel(agent: TestAgentType) {
+  return agent === "case-generator" ? "生成" : "分析";
+}
+
+function agentOutputTags(agent: TestAgentType) {
+  if (agent === "requirement-review") return ["疑点", "边界", "异常", "权限", "风险"];
+  if (agent === "case-generator") return ["蓝图", "用例", "缺口", "Excel"];
+  if (agent === "release-risk") return ["回归", "冒烟", "上线", "风险"];
+  if (agent === "change-impact") return ["影响", "接口", "回归", "发版"];
+  return ["根因", "模块", "提交", "修复"];
 }
 
 function writeStoredBoolean(key: string, value: boolean) {
@@ -1146,33 +1171,61 @@ function PdfUploadDropzone({
   );
 }
 
-function AgentSwitcher({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
+function AgentCommandCenter({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
+  const activeAgent = agentOptions.find((item) => item.value === value) ?? agentOptions[1];
+  const ActiveIcon = activeAgent.icon;
+
   return (
-    <div className="grid gap-2">
-      {agentOptions.map((item) => {
-        const Icon = item.icon;
-        const active = value === item.value;
-        return (
-          <button
-            key={item.value}
-            className={clsx(
-              "flex min-h-16 w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition ring-1",
-              active ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200",
-            )}
-            type="button"
-            onClick={() => onChange(item.value)}
-          >
-            <span className={clsx("grid size-9 shrink-0 place-items-center rounded-lg", active ? "bg-white/10 text-white" : "bg-white text-teal-700 ring-1 ring-slate-200")}>
-              <Icon className="size-4" />
+    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
+        <div className="flex min-w-0 items-start gap-3">
+          <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm">
+            <ActiveIcon className="size-5" />
+          </span>
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <h2 className="text-base font-semibold text-slate-900">{activeAgent.label}</h2>
+              <span className="rounded-full bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-500 ring-1 ring-slate-200">{agentInputKind(value)}</span>
+              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-200">{agentModeLabel(value)}</span>
+            </div>
+            <p className="mt-1 break-words text-sm leading-6 text-slate-500">{activeAgent.description}</p>
+          </div>
+        </div>
+        <div className="flex flex-wrap gap-1.5">
+          {agentOutputTags(value).map((tag) => (
+            <span key={tag} className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+              {tag}
             </span>
-            <span className="min-w-0">
-              <span className="block font-semibold">{item.label}</span>
-              <span className={clsx("mt-1 block text-xs leading-5", active ? "text-slate-300" : "text-slate-500")}>{item.description}</span>
-            </span>
-          </button>
-        );
-      })}
-    </div>
+          ))}
+        </div>
+      </div>
+
+      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
+        {agentOptions.map((item) => {
+          const Icon = item.icon;
+          const active = value === item.value;
+          return (
+            <button
+              key={item.value}
+              className={clsx(
+                "flex min-h-24 w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition ring-1",
+                active ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200",
+              )}
+              type="button"
+              onClick={() => onChange(item.value)}
+            >
+              <span className={clsx("grid size-9 shrink-0 place-items-center rounded-lg", active ? "bg-white/10 text-white" : "bg-white text-teal-700 ring-1 ring-slate-200")}>
+                <Icon className="size-4" />
+              </span>
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold">{item.label}</span>
+                <span className={clsx("mt-1 line-clamp-2 block text-xs leading-5", active ? "text-slate-300" : "text-slate-500")}>{item.description}</span>
+              </span>
+            </button>
+          );
+        })}
+      </div>
+    </section>
   );
 }
 
@@ -1248,7 +1301,7 @@ function AgentAnalysisWorkspace({
           <div>
             <Loader2 className="mx-auto size-8 animate-spin text-teal-700" />
             <p className="mt-4 font-semibold text-slate-800">智能体分析中</p>
-            <p className="mt-1 text-sm text-slate-500">正在整理风险、清单和下一步动作。</p>
+            <p className="mt-1 text-sm text-slate-500">{activeAgent === "debug-assistant" ? "正在整理根因、模块和修复建议。" : "正在整理风险、清单和下一步动作。"}</p>
           </div>
         </div>
       ) : result ? (
@@ -1317,25 +1370,35 @@ function AgentAnalysisWorkspace({
 
 function AgentSidePanel({
   activeAgent,
-  onAgentChange,
   result,
 }: {
   activeAgent: TestAgentType;
-  onAgentChange: (value: TestAgentType) => void;
   result: AgentAnalysisResponse | null;
 }) {
   const agent = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+  const Icon = agent.icon;
   const sectionCount = result?.sections.length ?? 0;
   const itemCount = result?.sections.reduce((sum, section) => sum + section.items.length, 0) ?? 0;
 
   return (
     <>
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <h2 className="font-semibold">工作台</h2>
-        <p className="mt-0.5 text-xs text-slate-500">当前：{agent.shortLabel}</p>
-      </div>
-      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-        <AgentSwitcher value={activeAgent} onChange={onAgentChange} />
+        <div className="flex items-start gap-3">
+          <span className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white">
+            <Icon className="size-4" />
+          </span>
+          <div className="min-w-0">
+            <h2 className="font-semibold">{agent.shortLabel}</h2>
+            <p className="mt-1 break-words text-xs leading-5 text-slate-500">{agent.description}</p>
+          </div>
+        </div>
+        <div className="mt-3 flex flex-wrap gap-1.5">
+          {agentOutputTags(activeAgent).map((tag) => (
+            <span key={tag} className="rounded-full bg-slate-50 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
+              {tag}
+            </span>
+          ))}
+        </div>
       </div>
       <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
         <h3 className="font-semibold">结果</h3>
@@ -1421,6 +1484,7 @@ export default function Home() {
   const now = useTicker(isLoading || isAgentRunning || progressOpen);
   const isDemoResult = result?.source === "demo";
   const currentAgentOption = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+  const CurrentAgentIcon = currentAgentOption.icon;
   const analysisMode = isAnalysisAgent(activeAgent);
   const reviewMode = activeAgent === "requirement-review";
   const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "待生成";
@@ -1585,11 +1649,13 @@ export default function Home() {
 
   function getAnalysisInputLabel() {
     if (activeAgent === "change-impact") return "git diff / PR 材料";
+    if (activeAgent === "debug-assistant") return "Bug 现场材料";
     return "发布材料";
   }
 
   function getAnalysisInputError() {
     if (activeAgent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
+    if (activeAgent === "debug-assistant") return "请输入至少 20 个字符的日志、堆栈或请求材料。";
     return "请输入至少 20 个字符的发布材料。";
   }
 
@@ -1599,6 +1665,9 @@ export default function Home() {
     }
     if (activeAgent === "change-impact") {
       return { title: "准备开始变更影响分析", floating: "AI 正在分析变更" };
+    }
+    if (activeAgent === "debug-assistant") {
+      return { title: "准备开始 Bug 根因分析", floating: "AI 正在分析根因" };
     }
     return { title: "准备开始发布风险分析", floating: "AI 正在分析" };
   }
@@ -1619,7 +1688,7 @@ export default function Home() {
     setIsAgentRunning(true);
     setAgentError("");
     const runningCopy = getAgentRunningCopy();
-    startProgress("AI 评审过程", runningCopy.floating, {
+    startProgress("AI 分析过程", runningCopy.floating, {
       id: "agent-start",
       type: "stage",
       message: runningCopy.title,
@@ -2041,6 +2110,10 @@ export default function Home() {
         </div>
       </section>
 
+      <section className="mx-auto max-w-[1600px] px-5 pt-5 sm:px-8">
+        <AgentCommandCenter value={activeAgent} onChange={selectAgent} />
+      </section>
+
       <section className={clsx("mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-5 py-5 transition-[grid-template-columns] sm:px-8", workspaceGridClass)}>
         <aside className="min-w-0">
           <input
@@ -2145,12 +2218,12 @@ export default function Home() {
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">智能体配置</h2>
-                <p className="mt-0.5 text-xs text-slate-500">{currentAgentOption.description}</p>
+                <h2 className="text-base font-semibold text-slate-900">执行面板</h2>
+                <p className="mt-0.5 text-xs text-slate-500">{currentAgentOption.label}</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  {activeAgent === "requirement-review" || activeAgent === "case-generator" ? "PDF" : "文本"}
+                  {agentInputKind(activeAgent)}
                 </span>
                 <button
                   aria-label="收起生成配置"
@@ -2163,8 +2236,6 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <AgentSwitcher value={activeAgent} onChange={selectAgent} />
-
             {reviewMode ? (
               <PdfUploadDropzone
                 emptyLabel="上传 PRD PDF"
@@ -2472,34 +2543,59 @@ export default function Home() {
                   >
                     <PanelRightOpen className="size-4" />
                   </button>
-                  <button
-                    aria-label="查看模块目录"
-                    className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
-                    title={`模块 ${moduleNames.length} 个`}
-                    type="button"
-                    onClick={() => {
-                      writeStoredBoolean(storageKeys.rightRailCollapsed, false);
-                      writeStoredBoolean(storageKeys.modulePanelOpen, true);
-                    }}
-                  >
-                    <ListChecks className="size-4" />
-                  </button>
-                  <button
-                    aria-label="查看类型筛选"
-                    className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
-                    title={`当前类型：${activeCategory}`}
-                    type="button"
-                    onClick={() => {
-                      writeStoredBoolean(storageKeys.rightRailCollapsed, false);
-                      writeStoredBoolean(storageKeys.categoryPanelOpen, true);
-                    }}
-                  >
-                    <Shield className="size-4" />
-                  </button>
+                  {analysisMode ? (
+                    <>
+                      <button
+                        aria-label="查看当前智能体"
+                        className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                        title={currentAgentOption.label}
+                        type="button"
+                        onClick={() => writeStoredBoolean(storageKeys.rightRailCollapsed, false)}
+                      >
+                        <CurrentAgentIcon className="size-4" />
+                      </button>
+                      <button
+                        aria-label="查看分析结果"
+                        className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                        title={`分析项 ${agentResult?.sections.reduce((sum, section) => sum + section.items.length, 0) ?? 0} 条`}
+                        type="button"
+                        onClick={() => writeStoredBoolean(storageKeys.rightRailCollapsed, false)}
+                      >
+                        <ListChecks className="size-4" />
+                      </button>
+                    </>
+                  ) : (
+                    <>
+                      <button
+                        aria-label="查看模块目录"
+                        className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                        title={`模块 ${moduleNames.length} 个`}
+                        type="button"
+                        onClick={() => {
+                          writeStoredBoolean(storageKeys.rightRailCollapsed, false);
+                          writeStoredBoolean(storageKeys.modulePanelOpen, true);
+                        }}
+                      >
+                        <ListChecks className="size-4" />
+                      </button>
+                      <button
+                        aria-label="查看类型筛选"
+                        className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-slate-50 text-slate-600 transition hover:text-teal-700"
+                        title={`当前类型：${activeCategory}`}
+                        type="button"
+                        onClick={() => {
+                          writeStoredBoolean(storageKeys.rightRailCollapsed, false);
+                          writeStoredBoolean(storageKeys.categoryPanelOpen, true);
+                        }}
+                      >
+                        <Shield className="size-4" />
+                      </button>
+                    </>
+                  )}
                 </div>
               </div>
             ) : analysisMode ? (
-              <AgentSidePanel activeAgent={activeAgent} result={agentResult} onAgentChange={selectAgent} />
+              <AgentSidePanel activeAgent={activeAgent} result={agentResult} />
             ) : (
               <>
                 <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

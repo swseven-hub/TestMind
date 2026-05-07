@@ -7,9 +7,9 @@ import type {
   TestPriority,
 } from "@/types/test-case";
 
-export const testAgentTypes: TestAgentType[] = ["requirement-review", "case-generator", "release-risk", "change-impact"];
+export const testAgentTypes: TestAgentType[] = ["requirement-review", "case-generator", "release-risk", "change-impact", "debug-assistant"];
 
-export const analysisAgentTypes: TestAgentAnalysisType[] = ["requirement-review", "release-risk", "change-impact"];
+export const analysisAgentTypes: TestAgentAnalysisType[] = ["requirement-review", "release-risk", "change-impact", "debug-assistant"];
 
 const priorityValues: TestPriority[] = ["P0", "P1", "P2"];
 
@@ -73,12 +73,12 @@ function normalizeList(value: unknown, limit: number) {
 }
 
 export function normalizeTestAgent(value: string): TestAgentType {
-  if (value === "requirement-review" || value === "release-risk" || value === "case-generator" || value === "change-impact") return value;
+  if (value === "requirement-review" || value === "release-risk" || value === "case-generator" || value === "change-impact" || value === "debug-assistant") return value;
   return "case-generator";
 }
 
 export function normalizeAnalysisAgent(value: string): TestAgentAnalysisType {
-  if (value === "release-risk" || value === "change-impact") return value;
+  if (value === "release-risk" || value === "change-impact" || value === "debug-assistant") return value;
   return "requirement-review";
 }
 
@@ -92,8 +92,17 @@ export function normalizeAgentAnalysisPayload(
   const sections = Array.isArray(payload.sections)
     ? payload.sections.map(normalizeSection).filter((item): item is AgentAnalysisSection => item !== null)
     : [];
-  const fallbackTitle = agent === "requirement-review" ? "需求评审报告" : agent === "change-impact" ? "变更影响分析报告" : "发布风险报告";
-  const summary = cleanText(payload.summary) || (agent === "requirement-review" ? "已完成需求疑点、风险和测试关注点整理。" : agent === "change-impact" ? "已完成改动影响、风险和重点回归范围整理。" : "已完成发布风险、回归范围和上线检查整理。");
+  const fallbackTitle =
+    agent === "requirement-review" ? "需求评审报告" : agent === "change-impact" ? "变更影响分析报告" : agent === "debug-assistant" ? "Bug 根因分析报告" : "发布风险报告";
+  const summary =
+    cleanText(payload.summary) ||
+    (agent === "requirement-review"
+      ? "已完成需求疑点、风险和测试关注点整理。"
+      : agent === "change-impact"
+        ? "已完成改动影响、风险和重点回归范围整理。"
+        : agent === "debug-assistant"
+          ? "已完成疑似根因、涉及模块、可疑变更和修复建议整理。"
+          : "已完成发布风险、回归范围和上线检查整理。");
 
   return {
     agent,
@@ -120,6 +129,19 @@ function pickBySignals(sentences: string[], signals: string[], limit: number) {
   return (matched.length ? matched : sentences).slice(0, limit);
 }
 
+function uniqueList(items: string[], limit: number) {
+  const seen = new Set<string>();
+  const result: string[] = [];
+  for (const item of items) {
+    const normalized = cleanText(item);
+    if (!normalized || seen.has(normalized)) continue;
+    seen.add(normalized);
+    result.push(normalized);
+    if (result.length >= limit) break;
+  }
+  return result;
+}
+
 function toItems(sentences: string[], category: string, priority: TestPriority) {
   return sentences.map((sentence, index) => ({
     title: `${category} ${index + 1}`,
@@ -132,7 +154,7 @@ function toItems(sentences: string[], category: string, priority: TestPriority) 
 function fallbackSections(agent: TestAgentAnalysisType, summary: string): AgentAnalysisSection[] {
   return [
     {
-      title: agent === "requirement-review" ? "需求评审" : agent === "change-impact" ? "变更影响" : "发布风险",
+      title: agent === "requirement-review" ? "需求评审" : agent === "change-impact" ? "变更影响" : agent === "debug-assistant" ? "Bug 根因" : "发布风险",
       items: [
         {
           title: "分析结果",
@@ -148,14 +170,90 @@ export function generateFallbackAgentAnalysis(agent: TestAgentAnalysisType, inpu
   const sentences = splitSentences(input);
   const seed = sentences.length ? sentences : [cleanText(input) || "未提供足够内容。"];
 
+  if (agent === "debug-assistant") {
+    const rawLines = input.split(/\n+/).map(cleanText);
+    const logLines = uniqueList(
+      rawLines.filter((line) => /(?:error|exception|traceback|caused by|stack|failed|timeout|panic|fatal|500|4\d\d|5\d\d|报错|异常|失败|超时|崩溃|错误)/i.test(line)),
+      10,
+    );
+    const stackFrames = uniqueList(
+      rawLines.filter((line) => /(?:^\s*at\s+|^\s*File\s+|:\d+:\d+|\.java:\d+|\.ts:\d+|\.js:\d+|\.py:\d+|NullPointer|TypeError|ReferenceError|SQL|数据库)/i.test(line)),
+      8,
+    );
+    const requestSignals = uniqueList(pickBySignals(seed, ["GET ", "POST ", "PUT ", "DELETE ", "PATCH ", "/api", "request", "response", "status", "traceId", "requestId", "接口", "入参", "出参", "状态码", "token", "header"], 6), 6);
+    const commitSignals = uniqueList(seed.filter((sentence) => ["diff --git", "commit", "@@", "---", "+++", "fix", "merge", "release", "回滚", "提交", "分支", "版本"].some((signal) => sentence.includes(signal))), 6);
+    const rootCauseCandidates = [...logLines, ...stackFrames].length ? uniqueList([...logLines, ...stackFrames], 8) : pickBySignals(seed, ["错误", "异常", "失败", "超时", "为空", "undefined", "null", "数据库", "接口"], 8);
+    const modules = uniqueList(pickBySignals([...stackFrames, ...seed], ["src/", "app/", "api", "service", "controller", "route", "model", "schema", "dao", "mapper", "repository", "component", "页面", "接口", "服务"], 8), 8);
+
+    return {
+      agent,
+      source: "fallback",
+      title: "Bug 根因分析报告",
+      summary: `已基于 ${seed.length} 个日志/变更片段整理疑似根因、涉及模块和修复建议。`,
+      sections: [
+        {
+          title: "疑似根因",
+          description: "从错误日志、堆栈和异常关键词中提取的优先排查方向。",
+          items: toItems(rootCauseCandidates, "根因", "P0"),
+        },
+        {
+          title: "涉及模块",
+          description: "可能需要研发优先打开的文件、接口或服务位置。",
+          items: toItems(modules, "模块", "P1"),
+        },
+        {
+          title: "请求与现场",
+          description: "用于复现和定位的请求、状态码、traceId 或上下文字段。",
+          items: toItems(requestSignals, "现场", "P1"),
+        },
+        {
+          title: "可疑提交/变更",
+          description: "基于输入中的 diff、commit 或版本信息做静态关联。",
+          items: commitSignals.length
+            ? toItems(commitSignals, "变更", "P1")
+            : [
+                {
+                  title: "未提供提交信息",
+                  detail: "当前材料未包含 commit、diff 或版本范围，无法定位具体可疑提交。",
+                  priority: "P2",
+                  category: "变更",
+                },
+              ],
+        },
+        {
+          title: "相似历史 Bug",
+          items: [
+            {
+              title: "历史数据待接入",
+              detail: "未接入 PingCode 缺陷、事故复盘或日志检索库时，无法确认真实相似历史 Bug。",
+              priority: "P2",
+              category: "历史",
+            },
+          ],
+        },
+        {
+          title: "修复建议",
+          items: [
+            { title: "先稳定复现路径", detail: "用同一请求参数、账号、环境和版本复现，确认错误是否稳定出现。", priority: "P0", category: "修复" },
+            { title: "补充防御和日志", detail: "在空值、状态、接口返回、依赖超时和数据库写入处补充校验与关键日志。", priority: "P1", category: "修复" },
+            { title: "回归关联链路", detail: "修复后回归触发接口、上游入口、下游写入、失败重试和告警监控。", priority: "P1", category: "验证" },
+          ],
+        },
+      ],
+      checklist: ["复现同一请求和环境", "确认首个异常堆栈位置", "检查最近相关提交或配置变更", "补充关键日志和错误码", "回归接口、数据写入和失败重试"],
+      nextActions: ["让研发先查看 P0 根因候选对应代码", "补充 traceId、请求参数、环境、版本和 commit 范围", "修复后把复现路径沉淀为回归用例"],
+      warnings: ["未检测到可用的模型 API Key，当前报告由本地规则生成；相似历史 Bug 需要接入真实缺陷/事故数据。"],
+    };
+  }
+
   if (agent === "change-impact") {
     const changedFiles = input
       .split(/\n+/)
       .map((line) => line.match(/^(?:diff --git a\/|--- a\/|\+\+\+ b\/)([^\s]+)/)?.[1])
       .filter((item): item is string => Boolean(item))
-      .map((item) => item.replace(/^b\//, ""))
-      .slice(0, 12);
-    const moduleCandidates = changedFiles.length ? changedFiles : pickBySignals(seed, ["src/", "app/", "api", "service", "controller", "route", "model", "schema", "config"], 6);
+      .map((item) => item.replace(/^b\//, ""));
+    const uniqueChangedFiles = uniqueList(changedFiles, 12);
+    const moduleCandidates = uniqueChangedFiles.length ? uniqueChangedFiles : pickBySignals(seed, ["src/", "app/", "api", "service", "controller", "route", "model", "schema", "config"], 6);
     const risky = pickBySignals(seed, ["status", "state", "order", "payment", "refund", "coupon", "permission", "auth", "role", "token", "api", "database", "sql", "migration", "config", "cache", "callback", "webhook", "支付", "退款", "订单", "权限", "登录", "状态", "优惠券", "风控", "接口", "数据库", "配置"], 8);
     const interfaceRisks = pickBySignals(seed, ["api", "route", "request", "response", "params", "schema", "dto", "controller", "fetch", "axios", "接口", "入参", "出参", "字段", "错误码"], 6);
     const sections: AgentAnalysisSection[] = [
@@ -316,6 +414,27 @@ ${clippedInput}`,
 ${commonSchema}
 
 git diff / PR 材料：
+${clippedInput}`,
+    };
+  }
+
+  if (agent === "debug-assistant") {
+    return {
+      maxTokens: 5_000,
+      system:
+        "你是资深故障排查专家、后端研发和测试负责人，专门根据 stacktrace、error log、request、git diff、commit 信息定位疑似根因、涉及模块、可疑提交和修复验证建议。输出中文、短句、可执行。",
+      user: `请分析下面 Bug 现场材料，输出 Bug 根因分析报告。要求：
+1. 必须基于输入中的错误信息、堆栈、接口、traceId、request、response、状态码、文件路径、函数名、commit 或 diff 证据判断，不要泛泛而谈。
+2. 必须包含：疑似根因、涉及模块、请求与现场、可疑提交、相似历史 Bug、修复建议、验证建议。
+3. 如果没有历史缺陷/事故材料，相似历史 Bug 必须明确写“未接入历史数据，无法确认真实相似 Bug”，不能编造历史案例。
+4. 如果发现 5xx、支付/订单/权限/登录、数据写入、缓存、消息队列、回调、超时、空指针、类型错误、SQL、配置或环境差异，要提高优先级。
+5. priority 只能是 P0/P1/P2。P0 表示可能导致主链路不可用、资损、权限泄露、数据错误或高频线上报错。
+6. checklist 输出排查和修复验证清单，按可执行动词写。
+7. nextActions 输出 3-8 条下一步动作，必须明确研发优先看哪里、测试怎么复现、修复后怎么验证。
+
+${commonSchema}
+
+Bug 现场材料：
 ${clippedInput}`,
     };
   }
