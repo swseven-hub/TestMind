@@ -66,8 +66,20 @@ import {
   normalizeReasoningEffort,
 } from "@/lib/model-config";
 import { formatDuration, formatTokens, refreshRunHistory, storageChangeEvent, subscribeStorage, useRunHistory } from "@/lib/run-history";
+import { normalizeTestAgent } from "@/lib/test-agent";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
-import type { Complexity, CoverageModule, GenerateResponse, RiskLevel, TestCase, TestCategory } from "@/types/test-case";
+import type {
+  AgentAnalysisItem,
+  AgentAnalysisResponse,
+  Complexity,
+  CoverageModule,
+  GenerateResponse,
+  RiskLevel,
+  TestAgentAnalysisType,
+  TestAgentType,
+  TestCase,
+  TestCategory,
+} from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
 
@@ -103,6 +115,7 @@ const riskLabels: Record<RiskLevel, string> = {
 };
 
 const storageKeys = {
+  activeAgent: "testmind.agent.active.v1",
   provider: "testmind.provider",
   theme: "testmind.theme.v1",
   leftRailCollapsed: "testmind.ui.leftRailCollapsed.v1",
@@ -120,6 +133,44 @@ const themeOptions: Array<{ value: ThemeMode; label: string; icon: typeof Sun }>
   { value: "light", label: "亮色", icon: Sun },
   { value: "dark", label: "暗色", icon: Moon },
   { value: "system", label: "系统", icon: Monitor },
+];
+
+const agentOptions: Array<{
+  value: TestAgentType;
+  label: string;
+  shortLabel: string;
+  description: string;
+  icon: typeof FileText;
+  actionLabel: string;
+  placeholder: string;
+}> = [
+  {
+    value: "requirement-review",
+    label: "需求评审智能体",
+    shortLabel: "评审",
+    description: "提炼疑点、边界、异常、权限和测试风险。",
+    icon: Brain,
+    actionLabel: "开始需求评审",
+    placeholder: "粘贴 PRD 片段、需求说明、评审纪要或产品变更描述。",
+  },
+  {
+    value: "case-generator",
+    label: "用例生成智能体",
+    shortLabel: "用例",
+    description: "解析 PRD PDF，生成覆盖蓝图和可导出的测试用例。",
+    icon: FileText,
+    actionLabel: "生成测试用例",
+    placeholder: "",
+  },
+  {
+    value: "release-risk",
+    label: "发布风险智能体",
+    shortLabel: "发布",
+    description: "整理回归范围、冒烟清单、上线检查和风险项。",
+    icon: Zap,
+    actionLabel: "分析发布风险",
+    placeholder: "粘贴发布说明、需求变更、Bug 列表、接口变更或 Git diff。",
+  },
 ];
 
 function apiKeyStorageKey(provider: Provider) {
@@ -178,6 +229,14 @@ function useStoredValue(key: string, fallback: string) {
 
 function useStoredProvider() {
   return normalizeProvider(useStoredValue(storageKeys.provider, "deepseek"));
+}
+
+function useStoredAgent() {
+  return normalizeTestAgent(useStoredValue(storageKeys.activeAgent, "case-generator"));
+}
+
+function isAnalysisAgent(agent: TestAgentType): agent is TestAgentAnalysisType {
+  return agent !== "case-generator";
 }
 
 function writeStoredBoolean(key: string, value: boolean) {
@@ -1021,6 +1080,223 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
   );
 }
 
+function AgentSwitcher({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
+  return (
+    <div className="grid gap-2">
+      {agentOptions.map((item) => {
+        const Icon = item.icon;
+        const active = value === item.value;
+        return (
+          <button
+            key={item.value}
+            className={clsx(
+              "flex min-h-16 w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition ring-1",
+              active ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200",
+            )}
+            type="button"
+            onClick={() => onChange(item.value)}
+          >
+            <span className={clsx("grid size-9 shrink-0 place-items-center rounded-lg", active ? "bg-white/10 text-white" : "bg-white text-teal-700 ring-1 ring-slate-200")}>
+              <Icon className="size-4" />
+            </span>
+            <span className="min-w-0">
+              <span className="block font-semibold">{item.label}</span>
+              <span className={clsx("mt-1 block text-xs leading-5", active ? "text-slate-300" : "text-slate-500")}>{item.description}</span>
+            </span>
+          </button>
+        );
+      })}
+    </div>
+  );
+}
+
+function priorityBadgeClass(priority?: string) {
+  if (priority === "P0") return "bg-rose-50 text-rose-700 ring-rose-200";
+  if (priority === "P1") return "bg-amber-50 text-amber-700 ring-amber-200";
+  return "bg-slate-50 text-slate-600 ring-slate-200";
+}
+
+function AgentItem({ item }: { item: AgentAnalysisItem }) {
+  return (
+    <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+      <div className="flex flex-wrap items-center gap-2">
+        {item.priority ? <span className={clsx("rounded-full px-2 py-0.5 text-xs font-medium ring-1", priorityBadgeClass(item.priority))}>{item.priority}</span> : null}
+        {item.category ? <span className="rounded-full bg-white px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">{item.category}</span> : null}
+      </div>
+      <h3 className="mt-2 break-words text-sm font-semibold text-slate-900">{item.title}</h3>
+      <p className="mt-1 break-words text-sm leading-6 text-slate-600">{item.detail}</p>
+      {item.evidence ? <p className="mt-2 break-words text-xs leading-5 text-slate-400">依据：{item.evidence}</p> : null}
+      {item.suggestion ? <p className="mt-2 break-words text-xs leading-5 text-teal-700">建议：{item.suggestion}</p> : null}
+    </div>
+  );
+}
+
+function AgentAnalysisWorkspace({
+  activeAgent,
+  error,
+  isRunning,
+  result,
+}: {
+  activeAgent: TestAgentType;
+  error: string;
+  isRunning: boolean;
+  result: AgentAnalysisResponse | null;
+}) {
+  const agent = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+  const Icon = agent.icon;
+
+  return (
+    <>
+      <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+              <Icon className="size-4" />
+              {agent.label}
+            </div>
+            <h2 className="mt-2 text-2xl font-semibold tracking-normal">{result?.title ?? "等待智能体分析"}</h2>
+            <p className="mt-1 break-words text-sm leading-6 text-slate-500">{result?.summary ?? agent.description}</p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">
+              {result?.source === "ai" ? "AI 分析" : result?.source === "fallback" ? "本地规则" : "待运行"}
+            </span>
+            {result?.stats ? (
+              <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
+                {providerLabels[result.stats.provider]} / {formatDuration(result.stats.durationMs)}
+              </span>
+            ) : null}
+          </div>
+        </div>
+
+        {error ? (
+          <div className="mt-4 flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
+            <AlertCircle className="mt-0.5 size-4 shrink-0" />
+            <span>{error}</span>
+          </div>
+        ) : null}
+      </div>
+
+      {isRunning ? (
+        <div className="grid min-h-[360px] place-items-center rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
+          <div>
+            <Loader2 className="mx-auto size-8 animate-spin text-teal-700" />
+            <p className="mt-4 font-semibold text-slate-800">智能体分析中</p>
+            <p className="mt-1 text-sm text-slate-500">正在整理风险、清单和下一步动作。</p>
+          </div>
+        </div>
+      ) : result ? (
+        <>
+          {result.warnings.length ? (
+            <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm text-amber-800">
+              {result.warnings.join(" ")}
+            </div>
+          ) : null}
+
+          <div className="grid gap-4">
+            {result.sections.map((section, sectionIndex) => (
+              <section key={`${section.title}-${sectionIndex}`} className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                <div className="flex flex-col gap-1">
+                  <h3 className="text-lg font-semibold tracking-normal">{section.title}</h3>
+                  {section.description ? <p className="text-sm leading-6 text-slate-500">{section.description}</p> : null}
+                </div>
+                <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                  {section.items.map((item, itemIndex) => (
+                    <AgentItem key={`${section.title}-${item.title}-${itemIndex}`} item={item} />
+                  ))}
+                </div>
+              </section>
+            ))}
+          </div>
+
+          <div className="grid gap-4 xl:grid-cols-2">
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold">检查清单</h3>
+              <div className="mt-3 grid gap-2">
+                {result.checklist.map((item, index) => (
+                  <div key={`${item}-${index}`} className="flex gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200">
+                    <CheckCircle2 className="mt-0.5 size-4 shrink-0 text-teal-700" />
+                    <span className="break-words">{item}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+            <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+              <h3 className="font-semibold">下一步</h3>
+              <div className="mt-3 grid gap-2">
+                {result.nextActions.map((item, index) => (
+                  <div key={`${item}-${index}`} className="grid grid-cols-[24px_1fr] gap-2 rounded-lg bg-slate-50 px-3 py-2 text-sm text-slate-700 ring-1 ring-slate-200">
+                    <span className="grid size-6 place-items-center rounded-full bg-white text-xs font-semibold text-slate-500 ring-1 ring-slate-200">{index + 1}</span>
+                    <span className="min-w-0 break-words">{item}</span>
+                  </div>
+                ))}
+              </div>
+            </section>
+          </div>
+        </>
+      ) : (
+        <div className="grid min-h-[420px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-8 text-center shadow-sm">
+          <div className="w-full max-w-xl">
+            <div className="mx-auto grid size-14 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
+              <Icon className="size-7" />
+            </div>
+            <p className="mt-4 text-lg font-semibold text-slate-800">{agent.label}</p>
+            <p className="mx-auto mt-2 max-w-lg text-sm leading-6 text-slate-500">{agent.description}</p>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+function AgentSidePanel({
+  activeAgent,
+  onAgentChange,
+  result,
+}: {
+  activeAgent: TestAgentType;
+  onAgentChange: (value: TestAgentType) => void;
+  result: AgentAnalysisResponse | null;
+}) {
+  const agent = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+  const sectionCount = result?.sections.length ?? 0;
+  const itemCount = result?.sections.reduce((sum, section) => sum + section.items.length, 0) ?? 0;
+
+  return (
+    <>
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h2 className="font-semibold">工作台</h2>
+        <p className="mt-0.5 text-xs text-slate-500">当前：{agent.shortLabel}</p>
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <AgentSwitcher value={activeAgent} onChange={onAgentChange} />
+      </div>
+      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+        <h3 className="font-semibold">结果</h3>
+        <div className="mt-3 grid grid-cols-2 gap-2 text-sm">
+          <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">分组</p>
+            <p className="mt-1 font-semibold text-slate-800">{sectionCount}</p>
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+            <p className="text-xs text-slate-400">条目</p>
+            <p className="mt-1 font-semibold text-slate-800">{itemCount}</p>
+          </div>
+        </div>
+        {result?.nextActions.length ? (
+          <div className="mt-3 space-y-2">
+            {result.nextActions.slice(0, 5).map((item, index) => (
+              <p key={`${item}-${index}`} className="break-words rounded-lg bg-slate-50 px-3 py-2 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+                {item}
+              </p>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </>
+  );
+}
+
 function moduleSectionId(moduleName: string) {
   let hash = 0;
   for (const char of moduleName) hash = (hash * 31 + char.charCodeAt(0)) >>> 0;
@@ -1038,9 +1314,14 @@ export default function Home() {
   const [query, setQuery] = useState("");
   const [isDragging, setIsDragging] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
+  const [isAgentRunning, setIsAgentRunning] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [error, setError] = useState("");
+  const [agentError, setAgentError] = useState("");
+  const [agentInput, setAgentInput] = useState("");
+  const [agentResult, setAgentResult] = useState<AgentAnalysisResponse | null>(null);
   const isClientReady = useClientReady();
+  const activeAgent = useStoredAgent();
   const provider = useStoredProvider();
   const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
   const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
@@ -1068,6 +1349,8 @@ export default function Home() {
   const [lastEventAt, setLastEventAt] = useState(0);
   const now = useTicker(isLoading || progressOpen);
   const isDemoResult = result?.source === "demo";
+  const currentAgentOption = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+  const analysisMode = isAnalysisAgent(activeAgent);
   const sourceLabel = result?.source === "ai" ? "AI 生成" : isDemoResult ? "演示案例" : "待生成";
   const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
@@ -1195,6 +1478,63 @@ export default function Home() {
     }
     if (providerBaseURLs[nextProvider] && !readStoredValue(baseURLStorageKey(nextProvider), "")) {
       writeStoredValue(baseURLStorageKey(nextProvider), providerBaseURLs[nextProvider]);
+    }
+  }
+
+  function selectAgent(nextAgent: TestAgentType) {
+    writeStoredValue(storageKeys.activeAgent, nextAgent);
+    setError("");
+    setAgentError("");
+    if (nextAgent !== activeAgent && isAnalysisAgent(nextAgent)) setAgentResult(null);
+  }
+
+  async function runAgentAnalysis() {
+    if (!isAnalysisAgent(activeAgent)) {
+      await generate();
+      return;
+    }
+
+    if (isAgentRunning) return;
+
+    if (!isClientReady) {
+      setAgentError("正在读取本机保存的模型配置，请稍后再试。");
+      return;
+    }
+
+    const input = agentInput.trim();
+    if (input.length < 20) {
+      setAgentError("请输入至少 20 个字符的分析材料。");
+      return;
+    }
+
+    setIsAgentRunning(true);
+    setAgentError("");
+    try {
+      const response = await fetch("/api/agents/analyze", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent: activeAgent,
+          input,
+          provider,
+          model: model.trim() || providerModels[provider],
+          apiKey: apiKey.trim(),
+          thinkingMode,
+          reasoningEffort,
+          ...(provider === "velotric" ? { baseURL: baseURL.trim() || providerBaseURLs.velotric || "" } : {}),
+        }),
+      });
+
+      const payload = (await response.json().catch(() => null)) as AgentAnalysisResponse | { message?: string } | null;
+      if (!response.ok) {
+        throw new Error(payload && "message" in payload && payload.message ? payload.message : "智能体分析失败，请稍后重试。");
+      }
+
+      setAgentResult(payload as AgentAnalysisResponse);
+    } catch (caught) {
+      setAgentError(caught instanceof Error ? caught.message : "智能体分析失败，请稍后重试。");
+    } finally {
+      setIsAgentRunning(false);
     }
   }
 
@@ -1436,7 +1776,7 @@ export default function Home() {
             </div>
             <div>
               <h1 className="text-xl font-semibold">TestMind</h1>
-              <p className="text-sm text-slate-500">需求文档转测试用例</p>
+              <p className="text-sm text-slate-500">AI 测试智能体工作台</p>
             </div>
           </div>
           <div className="flex flex-wrap items-center gap-2">
@@ -1502,18 +1842,38 @@ export default function Home() {
                 >
                   <PanelLeftOpen className="size-4" />
                 </button>
-                <button
-                  aria-label="上传 PRD"
-                  className={clsx(
-                    "grid size-11 place-items-center rounded-lg border transition",
-                    file ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
-                  )}
-                  title={file ? file.name : "上传 PRD"}
-                  type="button"
-                  onClick={() => inputRef.current?.click()}
-                >
-                  <UploadCloud className="size-4" />
-                </button>
+                {agentOptions.map((item) => {
+                  const Icon = item.icon;
+                  return (
+                    <button
+                      key={item.value}
+                      aria-label={item.label}
+                      className={clsx(
+                        "grid size-11 place-items-center rounded-lg border transition",
+                        activeAgent === item.value ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                      )}
+                      title={item.label}
+                      type="button"
+                      onClick={() => selectAgent(item.value)}
+                    >
+                      <Icon className="size-4" />
+                    </button>
+                  );
+                })}
+                {!analysisMode ? (
+                  <button
+                    aria-label="上传 PRD"
+                    className={clsx(
+                      "grid size-11 place-items-center rounded-lg border transition",
+                      file ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                    )}
+                    title={file ? file.name : "上传 PRD"}
+                    type="button"
+                    onClick={() => inputRef.current?.click()}
+                  >
+                    <UploadCloud className="size-4" />
+                  </button>
+                ) : null}
                 <button
                   aria-label="展开密钥与模型"
                   className={clsx(
@@ -1530,14 +1890,14 @@ export default function Home() {
                   <KeyRound className="size-4" />
                 </button>
                 <button
-                  aria-label="生成测试用例"
+                  aria-label={currentAgentOption.actionLabel}
                   className="grid size-11 place-items-center rounded-lg bg-teal-700 text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-                  disabled={!isClientReady}
-                  title={isLoading ? "查看生成过程" : "生成测试用例"}
+                  disabled={!isClientReady || (analysisMode && isAgentRunning)}
+                  title={analysisMode ? currentAgentOption.actionLabel : isLoading ? "查看生成过程" : "生成测试用例"}
                   type="button"
-                  onClick={generate}
+                  onClick={analysisMode ? runAgentAnalysis : generate}
                 >
-                  {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+                  {isLoading || isAgentRunning ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
                 </button>
               </div>
             </div>
@@ -1545,12 +1905,12 @@ export default function Home() {
           <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
-                <h2 className="text-base font-semibold text-slate-900">生成配置</h2>
-                <p className="mt-0.5 text-xs text-slate-500">上传 PRD，配置模型后生成测试用例。</p>
+                <h2 className="text-base font-semibold text-slate-900">智能体配置</h2>
+                <p className="mt-0.5 text-xs text-slate-500">{currentAgentOption.description}</p>
               </div>
               <div className="flex items-center gap-2">
                 <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  PDF
+                  {analysisMode ? "文本" : "PDF"}
                 </span>
                 <button
                   aria-label="收起生成配置"
@@ -1563,33 +1923,50 @@ export default function Home() {
                 </button>
               </div>
             </div>
-            <div
-              className={clsx(
-                "group grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
-                isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
-              )}
-              onClick={() => inputRef.current?.click()}
-              onDragOver={(event) => {
-                event.preventDefault();
-                setIsDragging(true);
-              }}
-              onDragLeave={() => setIsDragging(false)}
-              onDrop={(event) => {
-                event.preventDefault();
-                setIsDragging(false);
-                pickFile(event.dataTransfer.files[0]);
-              }}
-            >
-              <div className="space-y-4">
-                <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
-                  <UploadCloud className="size-6" />
-                </div>
-                <div>
-                  <p className="break-words font-semibold">{file ? file.name : "上传 PRD PDF"}</p>
-                  <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
+            <AgentSwitcher value={activeAgent} onChange={selectAgent} />
+
+            {!analysisMode ? (
+              <div
+                className={clsx(
+                  "group mt-4 grid min-h-44 cursor-pointer place-items-center rounded-lg border border-dashed p-5 text-center transition",
+                  isDragging ? "border-teal-500 bg-teal-50" : "border-slate-300 bg-slate-50/80 hover:border-teal-400 hover:bg-teal-50/30",
+                )}
+                onClick={() => inputRef.current?.click()}
+                onDragOver={(event) => {
+                  event.preventDefault();
+                  setIsDragging(true);
+                }}
+                onDragLeave={() => setIsDragging(false)}
+                onDrop={(event) => {
+                  event.preventDefault();
+                  setIsDragging(false);
+                  pickFile(event.dataTransfer.files[0]);
+                }}
+              >
+                <div className="space-y-4">
+                  <div className="mx-auto grid size-12 place-items-center rounded-lg bg-white text-teal-700 shadow-sm ring-1 ring-slate-200 transition group-hover:-translate-y-0.5">
+                    <UploadCloud className="size-6" />
+                  </div>
+                  <div>
+                    <p className="break-words font-semibold">{file ? file.name : "上传 PRD PDF"}</p>
+                    <p className="mt-1 text-sm text-slate-500">{file ? `${(file.size / 1024 / 1024).toFixed(2)} MB` : "拖入文件或点击选择"}</p>
+                  </div>
                 </div>
               </div>
-            </div>
+            ) : (
+              <label className="mt-4 block">
+                <span className="text-xs font-medium text-slate-500">分析材料</span>
+                <textarea
+                  className="mt-1 min-h-64 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
+                  placeholder={currentAgentOption.placeholder}
+                  value={agentInput}
+                  onChange={(event) => {
+                    setAgentInput(event.target.value);
+                    setAgentError("");
+                  }}
+                />
+              </label>
+            )}
 
             {isClientReady ? (
               <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
@@ -1713,17 +2090,17 @@ export default function Home() {
 
             <button
               className="mt-4 inline-flex h-11 w-full items-center justify-center gap-2 rounded-lg bg-teal-700 px-4 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
-              disabled={!isClientReady}
-              onClick={generate}
+              disabled={!isClientReady || (analysisMode && isAgentRunning)}
+              onClick={analysisMode ? runAgentAnalysis : generate}
             >
-              {isLoading ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-              {isLoading ? "正在 AI 生成，查看过程" : "生成测试用例"}
+              {isLoading || isAgentRunning ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
+              {analysisMode ? (isAgentRunning ? "智能体分析中" : currentAgentOption.actionLabel) : isLoading ? "正在 AI 生成，查看过程" : "生成测试用例"}
             </button>
 
-            {error ? (
+            {(analysisMode ? agentError : error) ? (
               <div className="mt-4 flex gap-2 rounded-lg border border-rose-200 bg-rose-50 p-3 text-sm text-rose-700">
                 <AlertCircle className="mt-0.5 size-4 shrink-0" />
-                <span>{error}</span>
+                <span>{analysisMode ? agentError : error}</span>
               </div>
             ) : null}
           </div>
@@ -1731,6 +2108,10 @@ export default function Home() {
         </aside>
 
         <section id="case-results" className="min-w-0 space-y-4">
+          {analysisMode ? (
+            <AgentAnalysisWorkspace activeAgent={activeAgent} error={agentError} isRunning={isAgentRunning} result={agentResult} />
+          ) : (
+            <>
           <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
             <div className="flex flex-col gap-4 xl:flex-row xl:items-center xl:justify-between">
               <div className="min-w-0">
@@ -1844,6 +2225,8 @@ export default function Home() {
               </div>
             </div>
           )}
+            </>
+          )}
         </section>
         <aside className="min-w-0">
           <div className="sticky top-5 space-y-3">
@@ -1885,6 +2268,8 @@ export default function Home() {
                   </button>
                 </div>
               </div>
+            ) : analysisMode ? (
+              <AgentSidePanel activeAgent={activeAgent} result={agentResult} onAgentChange={selectAgent} />
             ) : (
               <>
                 <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">

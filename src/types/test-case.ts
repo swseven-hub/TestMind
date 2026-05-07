@@ -16,6 +16,10 @@ export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
 export type RunStatus = "success" | "failed" | "cancelled";
 
+export type TestAgentType = "requirement-review" | "case-generator" | "release-risk";
+
+export type TestAgentAnalysisType = Exclude<TestAgentType, "case-generator">;
+
 export type GenerationUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -118,4 +122,42 @@ export type GenerateResponse = {
   warnings: string[];
   coverageBlueprint?: CoverageBlueprint;
   stats?: GenerationStats;
+};
+
+export type AgentAnalysisItem = {
+  title: string;
+  detail: string;
+  priority?: TestPriority;
+  category?: string;
+  evidence?: string;
+  suggestion?: string;
+};
+
+export type AgentAnalysisSection = {
+  title: string;
+  description?: string;
+  items: AgentAnalysisItem[];
+};
+
+export type AgentAnalysisStats = {
+  startedAt: string;
+  completedAt: string;
+  durationMs: number;
+  provider: "deepseek" | "aliyun" | "openai" | "velotric";
+  model: string;
+  thinkingMode?: ThinkingMode;
+  reasoningEffort?: ReasoningEffort;
+  sourceTextLength: number;
+};
+
+export type AgentAnalysisResponse = {
+  agent: TestAgentAnalysisType;
+  source: "ai" | "fallback";
+  title: string;
+  summary: string;
+  sections: AgentAnalysisSection[];
+  checklist: string[];
+  nextActions: string[];
+  warnings: string[];
+  stats?: AgentAnalysisStats;
 };
