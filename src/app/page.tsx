@@ -7,13 +7,10 @@ import {
   BookOpen,
   Bot,
   Brain,
-  Check,
   CheckCircle2,
   ChevronDown,
   Clock3,
   Download,
-  Eye,
-  EyeOff,
   FileText,
   GitPullRequest,
   History,
@@ -29,6 +26,7 @@ import {
   PanelRightOpen,
   PlayCircle,
   Search,
+  Settings,
   Shield,
   Sparkles,
   Square,
@@ -42,28 +40,14 @@ import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
 import { downloadExcel } from "@/lib/download-excel";
 import {
-  aliyunModelOptions,
-  deepseekModelOptions,
-  getAliyunModelOption,
-  getAliyunOutputPrice,
-  getDeepSeekModelOption,
-  getOpenAIModelOption,
-  getVelotricModelOption,
   normalizeProvider,
   normalizeThinkingMode,
-  openaiModelOptions,
   providerBaseURLs,
   providerLabels,
   providerModels,
-  reasoningEffortDescriptions,
   reasoningEffortLabels,
-  reasoningEffortOptions,
-  thinkingModeDescriptions,
   thinkingModeLabels,
-  velotricModelOptions,
   type Provider,
-  type ReasoningEffort,
-  type ThinkingMode,
   normalizeReasoningEffort,
 } from "@/lib/model-config";
 import { formatDuration, formatTokens, refreshRunHistory, storageChangeEvent, subscribeStorage, useRunHistory } from "@/lib/run-history";
@@ -122,12 +106,9 @@ const storageKeys = {
   theme: "testmind.theme.v1",
   leftRailCollapsed: "testmind.ui.leftRailCollapsed.v1",
   rightRailCollapsed: "testmind.ui.rightRailCollapsed.v1",
-  modelPanelOpen: "testmind.ui.modelPanelOpen.v1",
   modulePanelOpen: "testmind.ui.modulePanelOpen.v1",
   categoryPanelOpen: "testmind.ui.categoryPanelOpen.v1",
 };
-
-const providerOptions: Provider[] = ["deepseek", "aliyun", "openai", "velotric"];
 
 type ThemeMode = "light" | "dark" | "system";
 
@@ -324,96 +305,6 @@ function useClientReady() {
   );
 }
 
-type CustomSelectOption = {
-  value: string;
-  label: string;
-  badge?: string;
-  description?: string;
-};
-
-function CustomSelect({
-  label,
-  options,
-  value,
-  onChange,
-}: {
-  label: string;
-  options: CustomSelectOption[];
-  value: string;
-  onChange: (value: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const rootRef = useRef<HTMLDivElement>(null);
-  const selected = options.find((item) => item.value === value) ?? options[0];
-
-  useEffect(() => {
-    if (!open) return;
-
-    const close = (event: MouseEvent) => {
-      if (!rootRef.current?.contains(event.target as Node)) setOpen(false);
-    };
-    window.addEventListener("mousedown", close);
-    return () => window.removeEventListener("mousedown", close);
-  }, [open]);
-
-  return (
-    <div ref={rootRef} className="relative">
-      <span className="text-xs font-medium text-slate-500">{label}</span>
-      <button
-        aria-expanded={open}
-        className={clsx(
-          "mt-1 flex min-h-10 w-full items-center justify-between gap-3 rounded-lg border bg-white px-3 py-2 text-left text-sm outline-none transition",
-          open ? "border-teal-500 ring-2 ring-teal-100" : "border-slate-200 hover:border-slate-300",
-        )}
-        type="button"
-        onClick={() => setOpen((current) => !current)}
-      >
-        <span className="min-w-0">
-          <span className="block truncate font-medium text-slate-900">{selected?.label}</span>
-          {selected?.description ? <span className="mt-0.5 block truncate text-xs text-slate-400">{selected.description}</span> : null}
-        </span>
-        <ChevronDown className={clsx("size-4 shrink-0 text-slate-500 transition", open && "rotate-180")} />
-      </button>
-      {open ? (
-        <div className="absolute left-0 right-0 top-full z-30 mt-2 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl">
-          <div className="max-h-72 overflow-y-auto">
-            {options.map((item) => {
-              const active = item.value === selected?.value;
-              return (
-                <button
-                  key={item.value}
-                  className={clsx(
-                    "flex w-full items-start justify-between gap-3 rounded-md px-3 py-2.5 text-left text-sm transition",
-                    active ? "bg-slate-950 text-white" : "text-slate-700 hover:bg-slate-50",
-                  )}
-                  type="button"
-                  onClick={() => {
-                    onChange(item.value);
-                    setOpen(false);
-                  }}
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2">
-                      <span className="truncate font-medium">{item.label}</span>
-                      {item.badge ? (
-                        <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-xs", active ? "bg-white/15 text-white" : "bg-teal-50 text-teal-700")}>
-                          {item.badge}
-                        </span>
-                      ) : null}
-                    </span>
-                    {item.description ? <span className={clsx("mt-1 block text-xs leading-5", active ? "text-slate-300" : "text-slate-400")}>{item.description}</span> : null}
-                  </span>
-                  {active ? <Check className="mt-0.5 size-4 shrink-0" /> : null}
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      ) : null}
-    </div>
-  );
-}
-
 type ProgressStatus = "idle" | "running" | "success" | "error" | "cancelled";
 
 type ProgressLog = {
@@ -599,32 +490,6 @@ function GenerationProgressModal({
   );
 }
 
-function ApiKeyConfigSkeleton() {
-  return (
-    <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-      <div className="flex items-center justify-between gap-3">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <KeyRound className="size-4 text-teal-700" />
-          密钥与模型
-        </div>
-        <span className="h-6 w-20 animate-pulse rounded-full bg-slate-100" />
-      </div>
-      <div className="mt-3 grid grid-cols-4 gap-1 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
-        <span className="h-8 animate-pulse rounded-md bg-white" />
-        <span className="h-8 animate-pulse rounded-md bg-white" />
-        <span className="h-8 animate-pulse rounded-md bg-white" />
-        <span className="h-8 animate-pulse rounded-md bg-white" />
-      </div>
-      <div className="mt-3 h-10 animate-pulse rounded-lg bg-slate-50 ring-1 ring-slate-200" />
-      <div className="mt-2 flex items-center justify-between gap-3">
-        <span className="h-5 w-28 animate-pulse rounded-md bg-slate-50" />
-        <span className="h-5 w-14 animate-pulse rounded-md bg-slate-50" />
-      </div>
-      <div className="mt-3 h-10 animate-pulse rounded-lg bg-slate-50 ring-1 ring-slate-200" />
-    </div>
-  );
-}
-
 function DemoExperiencePopover({ active, open, onLoad, onOpenChange }: { active: boolean; open: boolean; onLoad: () => void; onOpenChange: (value: boolean) => void }) {
   const moduleCount = new Set(demoGenerateResponse.cases.map((item) => item.module)).size;
   const [isHovering, setIsHovering] = useState(false);
@@ -791,233 +656,6 @@ function RunStatsPanel({ result }: { result: GenerateResponse | null }) {
         ) : null}
       </div>
     </section>
-  );
-}
-
-function AliyunModelConfig({
-  model,
-  onModelChange,
-  onThinkingModeChange,
-  thinkingMode,
-}: {
-  model: string;
-  onModelChange: (value: string) => void;
-  onThinkingModeChange: (value: ThinkingMode) => void;
-  thinkingMode: ThinkingMode;
-}) {
-  const selected = getAliyunModelOption(model);
-  const outputPrice = getAliyunOutputPrice(model, thinkingMode);
-
-  return (
-    <div className="mt-3 space-y-3">
-      <CustomSelect
-        label="模型选择"
-        options={aliyunModelOptions.map((item) => ({
-          value: item.id,
-          label: item.id,
-          badge: item.badge,
-          description: item.suitableFor,
-        }))}
-        value={selected.id}
-        onChange={onModelChange}
-      />
-
-      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              {selected.name}
-              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
-            </div>
-          </div>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
-        <p className="mt-2 text-xs leading-5 text-slate-400">
-          参考单价：输入 ¥{selected.pricing.inputPerMTokens}/百万 Token，输出 ¥{outputPrice}/百万 Token，以阿里云账单为准。
-        </p>
-      </div>
-
-      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-        <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-          <Brain className="size-4 text-teal-700" />
-          生成模式
-        </div>
-        <div className="mt-3 grid grid-cols-2 rounded-lg bg-slate-50 p-1 ring-1 ring-slate-200">
-          {(["fast", "quality"] as const).map((item) => (
-            <button
-              key={item}
-              className={clsx(
-                "min-h-8 rounded-md px-2 text-sm font-medium transition",
-                thinkingMode === item ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white",
-              )}
-              type="button"
-              onClick={() => onThinkingModeChange(item)}
-            >
-              {thinkingModeLabels[item]}
-            </button>
-          ))}
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{thinkingModeDescriptions[thinkingMode]}</p>
-      </div>
-    </div>
-  );
-}
-
-function DeepSeekModelConfig({ model, onModelChange }: { model: string; onModelChange: (value: string) => void }) {
-  const selected = getDeepSeekModelOption(model);
-
-  return (
-    <div className="mt-3 space-y-3">
-      <CustomSelect
-        label="模型选择"
-        options={deepseekModelOptions.map((item) => ({
-          value: item.id,
-          label: item.id,
-          badge: item.badge,
-          description: item.suitableFor,
-        }))}
-        value={selected.id}
-        onChange={onModelChange}
-      />
-
-      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              {selected.name}
-              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
-            </div>
-          </div>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
-        <p className="mt-2 text-xs leading-5 text-slate-400">
-          参考单价：输入缓存命中 ¥{selected.pricing.inputCacheHitPerMTokens}/百万 Token，输入未命中 ¥{selected.pricing.inputCacheMissPerMTokens}/百万 Token，输出 ¥{selected.pricing.outputPerMTokens}/百万 Token。
-        </p>
-        {selected.pricing.discountedUntil ? (
-          <p className="mt-1 text-xs leading-5 text-amber-700">
-            当前为优惠价，优惠至 {selected.pricing.discountedUntil}；原价输入未命中 ¥{selected.pricing.originalInputCacheMissPerMTokens}/百万 Token，输出 ¥{selected.pricing.originalOutputPerMTokens}/百万 Token。
-          </p>
-        ) : null}
-      </div>
-    </div>
-  );
-}
-
-function OpenAIModelConfig({ model, onModelChange }: { model: string; onModelChange: (value: string) => void }) {
-  const selected = getOpenAIModelOption(model);
-
-  return (
-    <div className="mt-3 space-y-3">
-      <CustomSelect
-        label="模型选择"
-        options={openaiModelOptions.map((item) => ({
-          value: item.id,
-          label: item.id,
-          badge: item.badge,
-          description: item.suitableFor,
-        }))}
-        value={selected.id}
-        onChange={onModelChange}
-      />
-
-      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              {selected.name}
-              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
-            </div>
-          </div>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
-        <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
-      </div>
-    </div>
-  );
-}
-
-function ReasoningEffortConfig({
-  reasoningEffort,
-  onReasoningEffortChange,
-}: {
-  reasoningEffort: ReasoningEffort;
-  onReasoningEffortChange: (value: ReasoningEffort) => void;
-}) {
-  return (
-    <div className="mt-3 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-      <div className="flex items-center gap-2 text-sm font-medium text-slate-700">
-        <Brain className="size-4 text-teal-700" />
-        推理等级
-      </div>
-      <div className="mt-3">
-        <CustomSelect
-          label="智能"
-          options={reasoningEffortOptions.map((item) => ({
-            value: item,
-            label: reasoningEffortLabels[item],
-            badge: item === "medium" ? "默认" : undefined,
-            description: reasoningEffortDescriptions[item],
-          }))}
-          value={reasoningEffort}
-          onChange={(value) => onReasoningEffortChange(normalizeReasoningEffort(value))}
-        />
-      </div>
-      <p className="mt-2 text-xs leading-5 text-slate-500">{reasoningEffortDescriptions[reasoningEffort]}</p>
-    </div>
-  );
-}
-
-function VelotricGatewayConfig({
-  baseURL,
-  model,
-  onBaseURLChange,
-  onModelChange,
-}: {
-  baseURL: string;
-  model: string;
-  onBaseURLChange: (value: string) => void;
-  onModelChange: (value: string) => void;
-}) {
-  const selected = getVelotricModelOption(model);
-
-  return (
-    <div className="mt-3 space-y-3">
-      <label className="block">
-        <span className="text-xs font-medium text-slate-500">公司网关地址</span>
-        <input
-          className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
-          placeholder={providerBaseURLs.velotric}
-          value={baseURL}
-          spellCheck={false}
-          onChange={(event) => onBaseURLChange(event.target.value)}
-        />
-      </label>
-
-      <CustomSelect
-        label="模型选择"
-        options={velotricModelOptions.map((item) => ({
-          value: item.id,
-          label: item.id,
-          badge: item.badge,
-          description: item.suitableFor,
-        }))}
-        value={selected.id}
-        onChange={onModelChange}
-      />
-
-      <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-        <div className="flex items-start justify-between gap-3">
-          <div>
-            <div className="flex items-center gap-2 text-sm font-semibold text-slate-800">
-              {selected.name}
-              <span className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-100">{selected.badge}</span>
-            </div>
-          </div>
-        </div>
-        <p className="mt-2 text-xs leading-5 text-slate-500">{selected.description} 适合：{selected.suitableFor}</p>
-        <p className="mt-2 text-xs leading-5 text-slate-400">{selected.pricingNote}</p>
-      </div>
-    </div>
   );
 }
 
@@ -1193,7 +831,7 @@ function AnalysisFilePicker({
   title: string;
 }) {
   return (
-    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+    <div className="min-w-0 overflow-hidden rounded-lg border border-slate-200 bg-slate-50 p-3">
       <div className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <p className="text-sm font-semibold text-slate-800">{title}</p>
@@ -1212,8 +850,8 @@ function AnalysisFilePicker({
       {files.length ? (
         <div className="mt-3 grid gap-2">
           {files.map((file, index) => (
-            <div key={`${file.name}-${file.size}-${file.lastModified}-${index}`} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-2 text-xs ring-1 ring-slate-200">
-              <span className="min-w-0">
+            <div key={`${file.name}-${file.size}-${file.lastModified}-${index}`} className="flex w-full min-w-0 max-w-full items-center justify-between gap-2 overflow-hidden rounded-lg bg-white px-2.5 py-2 text-xs ring-1 ring-slate-200">
+              <span className="min-w-0 flex-1 overflow-hidden">
                 <span className="block truncate font-medium text-slate-700">{file.name}</span>
                 <span className="mt-0.5 block text-slate-400">{formatLocalFileSize(file)}</span>
               </span>
@@ -1530,11 +1168,9 @@ export default function Home() {
   const thinkingMode = normalizeThinkingMode(useStoredValue(thinkingModeStorageKey(provider), "fast"));
   const reasoningEffort = normalizeReasoningEffort(useStoredValue(reasoningEffortStorageKey(provider), "medium"));
   const runHistory = useRunHistory();
-  const [showApiKey, setShowApiKey] = useState(false);
   const themeMode = useThemeMode();
   const leftRailCollapsed = useStoredBoolean(storageKeys.leftRailCollapsed, false);
   const rightRailCollapsed = useStoredBoolean(storageKeys.rightRailCollapsed, false);
-  const modelPanelOpen = useStoredBoolean(storageKeys.modelPanelOpen, false);
   const modulePanelOpen = useStoredBoolean(storageKeys.modulePanelOpen, true);
   const categoryPanelOpen = useStoredBoolean(storageKeys.categoryPanelOpen, true);
   const [demoDetailsOpen, setDemoDetailsOpen] = useState(false);
@@ -1707,26 +1343,6 @@ export default function Home() {
     }
   }
 
-  function clearSavedApiKey() {
-    writeStoredValue(apiKeyStorageKey(provider), "");
-  }
-
-  function selectProvider(nextProvider: Provider) {
-    writeStoredValue(storageKeys.provider, nextProvider);
-    if (!readStoredValue(modelStorageKey(nextProvider), "")) {
-      writeStoredValue(modelStorageKey(nextProvider), providerModels[nextProvider]);
-    }
-    if (!readStoredValue(thinkingModeStorageKey(nextProvider), "")) {
-      writeStoredValue(thinkingModeStorageKey(nextProvider), "fast");
-    }
-    if (!readStoredValue(reasoningEffortStorageKey(nextProvider), "")) {
-      writeStoredValue(reasoningEffortStorageKey(nextProvider), "medium");
-    }
-    if (providerBaseURLs[nextProvider] && !readStoredValue(baseURLStorageKey(nextProvider), "")) {
-      writeStoredValue(baseURLStorageKey(nextProvider), providerBaseURLs[nextProvider]);
-    }
-  }
-
   function selectAgent(nextAgent: TestAgentType) {
     writeStoredValue(storageKeys.activeAgent, nextAgent);
     setError("");
@@ -1834,7 +1450,7 @@ export default function Home() {
           signal: abortController.signal,
         });
       } else {
-        const input = agentInput.trim();
+        const input = activeAgent === "debug-assistant" ? "" : agentInput.trim();
         const hasUploadedMaterials = agentMaterialFiles.length > 0 || agentReferenceFiles.length > 0;
         if (input.length < 20 && !hasUploadedMaterials) {
           const inputError = getAnalysisInputError();
@@ -2197,6 +1813,14 @@ export default function Home() {
               <History className="size-4" />
               运行记录
             </Link>
+            <Link
+              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+              href="/settings"
+              title="配置供应商、密钥和模型"
+            >
+              <Settings className="size-4" />
+              设置
+            </Link>
             <button
               aria-label={leftRailCollapsed ? "展开左侧生成配置" : "收起左侧生成配置"}
               className="grid size-10 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 shadow-sm transition hover:bg-slate-50 hover:text-slate-950"
@@ -2327,7 +1951,7 @@ export default function Home() {
                   </button>
                 )}
                 <button
-                  aria-label="展开密钥与模型"
+                  aria-label="打开模型设置"
                   className={clsx(
                     "grid size-11 place-items-center rounded-lg border transition",
                     apiKey.trim() ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
@@ -2335,8 +1959,7 @@ export default function Home() {
                   title={`${providerLabels[provider]} / ${model} / ${apiKey.trim() ? "密钥已就绪" : "密钥未保存"}`}
                   type="button"
                   onClick={() => {
-                    writeStoredBoolean(storageKeys.leftRailCollapsed, false);
-                    writeStoredBoolean(storageKeys.modelPanelOpen, true);
+                    window.location.href = "/settings";
                   }}
                 >
                   <KeyRound className="size-4" />
@@ -2395,18 +2018,20 @@ export default function Home() {
               />
             ) : (
               <div className="mt-4 space-y-3">
-                <label className="block">
-                  <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
-                  <textarea
-                    className="mt-1 min-h-52 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
-                    placeholder={currentAgentOption.placeholder}
-                    value={agentInput}
-                    onChange={(event) => {
-                      setAgentInput(event.target.value);
-                      setAgentError("");
-                    }}
-                  />
-                </label>
+                {activeAgent !== "debug-assistant" ? (
+                  <label className="block">
+                    <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
+                    <textarea
+                      className="mt-1 min-h-52 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
+                      placeholder={currentAgentOption.placeholder}
+                      value={agentInput}
+                      onChange={(event) => {
+                        setAgentInput(event.target.value);
+                        setAgentError("");
+                      }}
+                    />
+                  </label>
+                ) : null}
                 <AnalysisFilePicker
                   description={activeAgent === "debug-assistant" ? "上传 .log、HAR、JSON、diff、patch、PDF 等现场材料。" : "上传发布说明、PR diff、变更列表或接口文档。"}
                   files={agentMaterialFiles}
@@ -2427,123 +2052,29 @@ export default function Home() {
             )}
 
             {isClientReady ? (
-              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4">
-                <button
-                  aria-expanded={modelPanelOpen}
-                  className="flex w-full items-center justify-between gap-3 text-left"
-                  type="button"
-                  onClick={() => toggleStoredBoolean(storageKeys.modelPanelOpen, modelPanelOpen)}
-                >
-                  <span className="min-w-0">
-                    <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
-                      <KeyRound className="size-4 text-teal-700" />
-                      密钥与模型
-                    </span>
-                    <span className="mt-1 block truncate text-xs text-slate-500">
-                      {providerLabels[provider]} / {model || providerModels[provider]} / {modelSummary} / {apiKey.trim() ? "密钥已就绪" : "密钥未保存"}
-                    </span>
+              <Link
+                className="mt-4 flex items-center justify-between gap-3 rounded-lg border border-slate-200 bg-white p-4 text-left transition hover:border-teal-200 hover:bg-teal-50/30"
+                href="/settings"
+                title="打开模型设置"
+              >
+                <span className="min-w-0">
+                  <span className="flex items-center gap-2 text-sm font-medium text-slate-700">
+                    <KeyRound className="size-4 text-teal-700" />
+                    模型设置
                   </span>
-                  <div className="flex shrink-0 items-center gap-2">
-                    <span className="rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200">
-                      {providerLabels[provider]}
-                    </span>
-                    <ChevronDown className={clsx("size-4 text-slate-500 transition", modelPanelOpen && "rotate-180")} />
-                  </div>
-                </button>
-                {modelPanelOpen ? (
-                  <>
-                    <div className="mt-3">
-                      <CustomSelect
-                        label="供应商"
-                        options={providerOptions.map((item) => ({
-                          value: item,
-                          label: providerLabels[item],
-                          badge: item === "velotric" ? "公司" : undefined,
-                          description:
-                            item === "velotric"
-                              ? "走公司 GPT 号池网关"
-                              : item === "aliyun"
-                                ? "阿里云百炼兼容接口"
-                                : item === "openai"
-                                  ? "OpenAI 官方 API"
-                                  : "DeepSeek 官方 API",
-                        }))}
-                        value={provider}
-                        onChange={(value) => selectProvider(normalizeProvider(value))}
-                      />
-                    </div>
-                    <div className="relative mt-3">
-                      <input
-                        className="h-10 w-full rounded-lg border border-slate-200 bg-white pl-3 pr-11 text-sm outline-none transition focus:border-teal-500"
-                        type={showApiKey ? "text" : "password"}
-                        placeholder="sk-..."
-                        value={apiKey}
-                        spellCheck={false}
-                        autoComplete="off"
-                        onChange={(event) => writeStoredValue(apiKeyStorageKey(provider), event.target.value)}
-                      />
-                      <button
-                        aria-label={showApiKey ? "隐藏密钥" : "显示密钥"}
-                        className="absolute right-1.5 top-1/2 grid size-8 -translate-y-1/2 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-800"
-                        type="button"
-                        onClick={() => setShowApiKey((current) => !current)}
-                      >
-                        {showApiKey ? <EyeOff className="size-4" /> : <Eye className="size-4" />}
-                      </button>
-                    </div>
-                    <div className="mt-2 flex items-center justify-between gap-3 text-xs text-slate-500">
-                      <span>{apiKey.trim() ? "密钥已保存在本机浏览器" : "密钥未保存"}</span>
-                      <button
-                        className="rounded-md px-2 py-1 font-medium text-slate-600 transition hover:bg-white hover:text-slate-950 disabled:cursor-not-allowed disabled:text-slate-300"
-                        disabled={!apiKey.trim()}
-                        type="button"
-                        onClick={clearSavedApiKey}
-                      >
-                        清除密钥
-                      </button>
-                    </div>
-                    {provider === "aliyun" ? (
-                      <AliyunModelConfig
-                        model={model}
-                        thinkingMode={thinkingMode}
-                        onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                        onThinkingModeChange={(value) => writeStoredValue(thinkingModeStorageKey(provider), value)}
-                      />
-                    ) : provider === "deepseek" ? (
-                      <DeepSeekModelConfig
-                        model={model}
-                        onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                      />
-                    ) : provider === "velotric" ? (
-                      <>
-                        <VelotricGatewayConfig
-                          baseURL={baseURL}
-                          model={model}
-                          onBaseURLChange={(value) => writeStoredValue(baseURLStorageKey(provider), value)}
-                          onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                        />
-                        <ReasoningEffortConfig
-                          reasoningEffort={reasoningEffort}
-                          onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
-                        />
-                      </>
-                    ) : (
-                      <>
-                        <OpenAIModelConfig
-                          model={model}
-                          onModelChange={(value) => writeStoredValue(modelStorageKey(provider), value)}
-                        />
-                        <ReasoningEffortConfig
-                          reasoningEffort={reasoningEffort}
-                          onReasoningEffortChange={(value) => writeStoredValue(reasoningEffortStorageKey(provider), value)}
-                        />
-                      </>
-                    )}
-                  </>
-                ) : null}
-              </div>
+                  <span className="mt-1 block truncate text-xs text-slate-500">
+                    {providerLabels[provider]} / {model || providerModels[provider]} / {modelSummary} / {apiKey.trim() ? "密钥已就绪" : "密钥未保存"}
+                  </span>
+                </span>
+                <span
+                  className="shrink-0 rounded-full bg-slate-50 px-2 py-1 text-xs text-slate-500 ring-1 ring-slate-200"
+                  aria-hidden="true"
+                >
+                  设置
+                </span>
+              </Link>
             ) : (
-              <ApiKeyConfigSkeleton />
+              <div className="mt-4 rounded-lg border border-slate-200 bg-white p-4 text-sm text-slate-500">正在读取模型设置...</div>
             )}
 
             <button
