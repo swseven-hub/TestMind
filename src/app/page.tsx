@@ -9,6 +9,7 @@ import {
   Brain,
   CheckCircle2,
   ChevronDown,
+  ChevronRight,
   Clock3,
   Download,
   FileText,
@@ -912,18 +913,110 @@ function AnalysisFilePicker({
   );
 }
 
-function AgentCommandCenter({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
+function AgentSidebarSwitcher({
+  value,
+  onChange,
+  onCollapse,
+}: {
+  value: TestAgentType;
+  onChange: (value: TestAgentType) => void;
+  onCollapse: () => void;
+}) {
+  const [query, setQuery] = useState("");
+  const normalizedQuery = query.trim().toLowerCase();
+  const filteredAgents = agentOptions.filter((item) =>
+    [item.label, item.shortLabel, item.description, item.actionLabel, agentInputKind(item.value), agentModeLabel(item.value), ...agentOutputTags(item.value)]
+      .join(" ")
+      .toLowerCase()
+      .includes(normalizedQuery),
+  );
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex items-center justify-between gap-3">
+        <div>
+          <h2 className="text-base font-semibold text-slate-900">智能体</h2>
+          <p className="mt-0.5 text-xs text-slate-500">搜索并切换工作流</p>
+        </div>
+        <button
+          aria-label="收起智能体侧栏"
+          className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+          title="收起左栏"
+          type="button"
+          onClick={onCollapse}
+        >
+          <PanelLeftClose className="size-4" />
+        </button>
+      </div>
+
+      <label className="relative mt-3 block">
+        <Search className="pointer-events-none absolute left-3 top-1/2 size-4 -translate-y-1/2 text-slate-400" />
+        <input
+          aria-label="搜索智能体"
+          className="h-10 w-full rounded-lg border border-slate-200 bg-slate-50 pl-9 pr-3 text-sm outline-none transition focus:border-teal-500 focus:bg-white"
+          placeholder="搜索智能体、场景或输出"
+          value={query}
+          onChange={(event) => setQuery(event.target.value)}
+        />
+      </label>
+
+      <div className="mt-3 grid max-h-[42vh] gap-2 overflow-y-auto pr-1">
+        {filteredAgents.length ? (
+          filteredAgents.map((item) => {
+            const Icon = item.icon;
+            const active = value === item.value;
+            return (
+              <button
+                key={item.value}
+                className={clsx(
+                  "flex w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition ring-1",
+                  active ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200",
+                )}
+                type="button"
+                onClick={() => onChange(item.value)}
+              >
+                <span className={clsx("grid size-9 shrink-0 place-items-center rounded-lg", active ? "bg-white/10 text-white" : "bg-white text-teal-700 ring-1 ring-slate-200")}>
+                  <Icon className="size-4" />
+                </span>
+                <span className="min-w-0 flex-1">
+                  <span className="flex min-w-0 flex-wrap items-center gap-1.5">
+                    <span className="break-words text-sm font-semibold">{item.label}</span>
+                    <span className={clsx("rounded-full px-2 py-0.5 text-[11px] font-medium ring-1", active ? "bg-white/10 text-slate-200 ring-white/15" : "bg-white text-slate-500 ring-slate-200")}>
+                      {agentInputKind(item.value)}
+                    </span>
+                  </span>
+                  <span className={clsx("mt-1 line-clamp-2 block text-xs leading-5", active ? "text-slate-300" : "text-slate-500")}>{item.description}</span>
+                </span>
+              </button>
+            );
+          })
+        ) : (
+          <div className="rounded-lg border border-dashed border-slate-200 bg-slate-50 px-3 py-6 text-center text-sm text-slate-500">没有匹配的智能体</div>
+        )}
+      </div>
+    </section>
+  );
+}
+
+function AgentPathCard({ value }: { value: TestAgentType }) {
   const activeAgent = agentOptions.find((item) => item.value === value) ?? agentOptions[1];
   const ActiveIcon = activeAgent.icon;
 
   return (
-    <section className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
       <div className="flex flex-col gap-3 xl:flex-row xl:items-center xl:justify-between">
         <div className="flex min-w-0 items-start gap-3">
           <span className="grid size-11 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm">
             <ActiveIcon className="size-5" />
           </span>
           <div className="min-w-0">
+            <div className="mb-1 flex flex-wrap items-center gap-1.5 text-xs font-medium text-slate-400">
+              <span>工作台</span>
+              <ChevronRight className="size-3.5" />
+              <span>{agentModeLabel(value)}</span>
+              <ChevronRight className="size-3.5" />
+              <span className="text-teal-700">{activeAgent.shortLabel}</span>
+            </div>
             <div className="flex flex-wrap items-center gap-2">
               <h2 className="text-base font-semibold text-slate-900">{activeAgent.label}</h2>
               <span className="rounded-full bg-slate-50 px-2 py-0.5 text-xs font-medium text-slate-500 ring-1 ring-slate-200">{agentInputKind(value)}</span>
@@ -939,32 +1032,6 @@ function AgentCommandCenter({ value, onChange }: { value: TestAgentType; onChang
             </span>
           ))}
         </div>
-      </div>
-
-      <div className="mt-3 grid gap-2 sm:grid-cols-2 xl:grid-cols-5">
-        {agentOptions.map((item) => {
-          const Icon = item.icon;
-          const active = value === item.value;
-          return (
-            <button
-              key={item.value}
-              className={clsx(
-                "flex min-h-24 w-full items-start gap-3 rounded-lg px-3 py-3 text-left transition ring-1",
-                active ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-700 ring-slate-200 hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200",
-              )}
-              type="button"
-              onClick={() => onChange(item.value)}
-            >
-              <span className={clsx("grid size-9 shrink-0 place-items-center rounded-lg", active ? "bg-white/10 text-white" : "bg-white text-teal-700 ring-1 ring-slate-200")}>
-                <Icon className="size-4" />
-              </span>
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold">{item.label}</span>
-                <span className={clsx("mt-1 line-clamp-2 block text-xs leading-5", active ? "text-slate-300" : "text-slate-500")}>{item.description}</span>
-              </span>
-            </button>
-          );
-        })}
       </div>
     </section>
   );
@@ -1878,10 +1945,6 @@ export default function Home() {
         </div>
       </section>
 
-      <section className="mx-auto max-w-[1600px] px-5 pt-5 sm:px-8">
-        <AgentCommandCenter value={activeAgent} onChange={selectAgent} />
-      </section>
-
       <section className={clsx("mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-5 py-5 transition-[grid-template-columns] sm:px-8", workspaceGridClass)}>
         <aside className="min-w-0">
           <input
@@ -1997,26 +2060,17 @@ export default function Home() {
               </div>
             </div>
           ) : (
-          <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="sticky top-5 space-y-4">
+              <AgentSidebarSwitcher value={activeAgent} onChange={selectAgent} onCollapse={() => writeStoredBoolean(storageKeys.leftRailCollapsed, true)} />
+              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
             <div className="mb-4 flex items-center justify-between gap-3">
               <div>
                 <h2 className="text-base font-semibold text-slate-900">执行面板</h2>
                 <p className="mt-0.5 text-xs text-slate-500">{currentAgentOption.label}</p>
               </div>
-              <div className="flex items-center gap-2">
-                <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
-                  {agentInputKind(activeAgent)}
-                </span>
-                <button
-                  aria-label="收起生成配置"
-                  className="grid size-8 place-items-center rounded-md text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
-                  title="收起左栏"
-                  type="button"
-                  onClick={() => writeStoredBoolean(storageKeys.leftRailCollapsed, true)}
-                >
-                  <PanelLeftClose className="size-4" />
-                </button>
-              </div>
+              <span className="rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                {agentInputKind(activeAgent)}
+              </span>
             </div>
             {reviewMode ? (
               <PdfUploadDropzone
@@ -2086,11 +2140,13 @@ export default function Home() {
                 <span>{analysisMode ? agentError : error}</span>
               </div>
             ) : null}
-          </div>
+              </div>
+            </div>
           )}
         </aside>
 
         <section id="case-results" className="min-w-0 space-y-4">
+          <AgentPathCard value={activeAgent} />
           {analysisMode ? (
             <AgentAnalysisWorkspace activeAgent={activeAgent} error={agentError} isRunning={isAgentRunning} result={agentResult} />
           ) : (
