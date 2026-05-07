@@ -17,6 +17,7 @@ import {
   normalizeAgentAnalysisPayload,
   normalizeAnalysisAgent,
 } from "@/lib/test-agent";
+import { prepareAgentMaterial } from "@/lib/server/agent-material";
 import type {
   AgentAnalysisResponse,
   ReasoningEffort,
@@ -60,6 +61,11 @@ type AnalyzeRequest = {
   reasoningEffort?: string;
 };
 
+type AnalyzeBody = AnalyzeRequest & {
+  materialFiles: File[];
+  referenceFiles: File[];
+};
+
 async function extractPdfText(file: File) {
   const data = new Uint8Array(await file.arrayBuffer());
   const parser = new PDFParse({ data });
@@ -78,6 +84,8 @@ async function readAnalyzeRequest(request: Request) {
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     const fileValue = formData.get("file");
+    const materialFiles = formData.getAll("files").filter((item): item is File => item instanceof File);
+    const referenceFiles = formData.getAll("referenceFiles").filter((item): item is File => item instanceof File);
     return {
       body: {
         agent: String(formData.get("agent") ?? ""),
@@ -88,13 +96,20 @@ async function readAnalyzeRequest(request: Request) {
         baseURL: String(formData.get("baseURL") ?? ""),
         thinkingMode: String(formData.get("thinkingMode") ?? ""),
         reasoningEffort: String(formData.get("reasoningEffort") ?? ""),
-      } satisfies AnalyzeRequest,
+        materialFiles,
+        referenceFiles,
+      } satisfies AnalyzeBody,
       file: fileValue instanceof File ? fileValue : null,
     };
   }
 
+  const body = (await request.json()) as AnalyzeRequest;
   return {
-    body: (await request.json()) as AnalyzeRequest,
+    body: {
+      ...body,
+      materialFiles: [],
+      referenceFiles: [],
+    } satisfies AnalyzeBody,
     file: null,
   };
 }
@@ -158,9 +173,17 @@ function createClient(provider: Provider, apiKey: string, baseURL?: string) {
 }
 
 function getTextInputError(agent: TestAgentAnalysisType) {
-  if (agent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
-  if (agent === "debug-assistant") return "请输入至少 20 个字符的日志、堆栈或请求材料。";
-  return "请输入至少 20 个字符的发布材料。";
+  if (agent === "change-impact") return "请输入或上传 git diff / PR 材料。";
+  if (agent === "debug-assistant") return "请输入或上传日志、堆栈、请求或依据文档。";
+  return "请输入或上传发布材料。";
+}
+
+function appendWarnings(result: AgentAnalysisResponse, warnings: string[]) {
+  if (!warnings.length) return result;
+  return {
+    ...result,
+    warnings: [...result.warnings, ...warnings],
+  } satisfies AgentAnalysisResponse;
 }
 
 async function analyzeWithModel({
@@ -209,6 +232,7 @@ export async function POST(request: Request) {
     const { body, file } = await readAnalyzeRequest(request);
     const agent = normalizeAnalysisAgent(body.agent ?? "");
     let input = String(body.input ?? "").trim();
+    let materialWarnings: string[] = [];
 
     if (agent === "requirement-review") {
       if (!(file instanceof File)) {
@@ -227,12 +251,17 @@ export async function POST(request: Request) {
       if (!input || input.length < 30) {
         return NextResponse.json({ message: "未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。" }, { status: 422 });
       }
-    } else if (input.length < 20) {
-      return NextResponse.json({ message: getTextInputError(agent) }, { status: 400 });
-    }
-
-    if (input.length > 80_000) {
-      return NextResponse.json({ message: "单次分析材料不能超过 80000 个字符。" }, { status: 400 });
+    } else {
+      const prepared = await prepareAgentMaterial({
+        manualInput: input,
+        materialFiles: body.materialFiles,
+        referenceFiles: body.referenceFiles,
+      });
+      input = prepared.input;
+      materialWarnings = prepared.warnings;
+      if (input.length < 20) {
+        return NextResponse.json({ message: getTextInputError(agent) }, { status: 400 });
+      }
     }
 
     const provider = normalizeProvider(body.provider ?? "deepseek");
@@ -245,11 +274,11 @@ export async function POST(request: Request) {
     const baseURL = provider === "velotric" && String(body.baseURL ?? "").trim() ? String(body.baseURL).trim() : config.baseURL;
 
     if (!apiKey) {
-      const fallback = generateFallbackAgentAnalysis(agent, input);
+      const fallback = appendWarnings(generateFallbackAgentAnalysis(agent, input), materialWarnings);
       return NextResponse.json(withStats({ agent, input, model, provider, result: fallback, startedAt, thinkingMode, reasoningEffort }));
     }
 
-    const result = await analyzeWithModel({
+    const result = appendWarnings(await analyzeWithModel({
       agent,
       apiKey,
       baseURL,
@@ -258,7 +287,7 @@ export async function POST(request: Request) {
       provider,
       reasoningEffort,
       thinkingMode,
-    });
+    }), materialWarnings);
 
     return NextResponse.json(withStats({ agent, input, model, provider, result, startedAt, thinkingMode, reasoningEffort }));
   } catch (error) {

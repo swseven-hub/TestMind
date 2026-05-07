@@ -16,6 +16,7 @@ import {
   normalizeAgentAnalysisPayload,
   normalizeAnalysisAgent,
 } from "@/lib/test-agent";
+import { prepareAgentMaterial } from "@/lib/server/agent-material";
 import type {
   AgentAnalysisResponse,
   ReasoningEffort,
@@ -43,6 +44,11 @@ type AnalyzeRequest = {
   baseURL?: string;
   thinkingMode?: string;
   reasoningEffort?: string;
+};
+
+type AnalyzeBody = AnalyzeRequest & {
+  materialFiles: File[];
+  referenceFiles: File[];
 };
 
 const providerDefaults: Record<Provider, { model: string; baseURL?: string; envKey: string }> = {
@@ -85,6 +91,8 @@ async function readAnalyzeRequest(request: Request) {
   if (contentType.includes("multipart/form-data")) {
     const formData = await request.formData();
     const fileValue = formData.get("file");
+    const materialFiles = formData.getAll("files").filter((item): item is File => item instanceof File);
+    const referenceFiles = formData.getAll("referenceFiles").filter((item): item is File => item instanceof File);
     return {
       body: {
         agent: String(formData.get("agent") ?? ""),
@@ -95,13 +103,20 @@ async function readAnalyzeRequest(request: Request) {
         baseURL: String(formData.get("baseURL") ?? ""),
         thinkingMode: String(formData.get("thinkingMode") ?? ""),
         reasoningEffort: String(formData.get("reasoningEffort") ?? ""),
-      } satisfies AnalyzeRequest,
+        materialFiles,
+        referenceFiles,
+      } satisfies AnalyzeBody,
       file: fileValue instanceof File ? fileValue : null,
     };
   }
 
+  const body = (await request.json()) as AnalyzeRequest;
   return {
-    body: (await request.json()) as AnalyzeRequest,
+    body: {
+      ...body,
+      materialFiles: [],
+      referenceFiles: [],
+    } satisfies AnalyzeBody,
     file: null,
   };
 }
@@ -146,9 +161,9 @@ function createClient(provider: Provider, apiKey: string, baseURL?: string) {
 }
 
 function getTextInputError(agent: TestAgentAnalysisType) {
-  if (agent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
-  if (agent === "debug-assistant") return "请输入至少 20 个字符的日志、堆栈或请求材料。";
-  return "请输入至少 20 个字符的发布材料。";
+  if (agent === "change-impact") return "请输入或上传 git diff / PR 材料。";
+  if (agent === "debug-assistant") return "请输入或上传日志、堆栈、请求或依据文档。";
+  return "请输入或上传发布材料。";
 }
 
 function getTextInputStageMessage(agent: TestAgentAnalysisType) {
@@ -169,6 +184,14 @@ function getAiStageMessage(agent: TestAgentAnalysisType) {
   if (agent === "change-impact") return "AI 正在分析变更影响";
   if (agent === "debug-assistant") return "AI 正在分析 Bug 根因";
   return "AI 正在分析发布风险";
+}
+
+function appendWarnings(result: AgentAnalysisResponse, warnings: string[]) {
+  if (!warnings.length) return result;
+  return {
+    ...result,
+    warnings: [...result.warnings, ...warnings],
+  } satisfies AgentAnalysisResponse;
 }
 
 function withStats({
@@ -303,6 +326,7 @@ export async function POST(request: Request) {
 
           const agent = normalizeAnalysisAgent(body.agent ?? "");
           let input = String(body.input ?? "").trim();
+          let materialWarnings: string[] = [];
 
           if (agent === "requirement-review") {
             if (!(file instanceof File)) throw new Error("需求评审智能体请上传 PRD PDF。");
@@ -323,15 +347,35 @@ export async function POST(request: Request) {
               detail: `提取 ${input.length.toLocaleString("zh-CN")} 个字符，准备进入需求评审。`,
             });
           } else {
+            if (body.materialFiles.length || body.referenceFiles.length) {
+              onEvent({
+                type: "stage",
+                message: "正在解析上传文件",
+                detail: `主材料 ${body.materialFiles.length} 个，依据文档 ${body.referenceFiles.length} 个。`,
+              });
+            }
+            const prepared = await prepareAgentMaterial({
+              manualInput: input,
+              materialFiles: body.materialFiles,
+              referenceFiles: body.referenceFiles,
+            });
+            input = prepared.input;
+            materialWarnings = prepared.warnings;
+            assertNotAborted(request.signal);
             if (input.length < 20) throw new Error(getTextInputError(agent));
             onEvent({
               type: "stage",
               message: getTextInputStageMessage(agent),
-              detail: `共 ${input.length.toLocaleString("zh-CN")} 个字符。`,
+              detail: `共 ${input.length.toLocaleString("zh-CN")} 个字符；${prepared.fileSummaries.length ? `已合并 ${prepared.fileSummaries.length} 个上传文件。` : "未上传文件。"}`,
             });
+            if (materialWarnings.length) {
+              onEvent({
+                type: "stage",
+                message: "材料已自动整理",
+                detail: materialWarnings.join(" "),
+              });
+            }
           }
-
-          if (input.length > 80_000) throw new Error("单次分析材料不能超过 80000 个字符。");
 
           const provider = normalizeProvider(body.provider ?? "deepseek");
           const config = providerDefaults[provider];
@@ -357,14 +401,14 @@ export async function POST(request: Request) {
               message: "未检测到 API Key，改用本地规则评审",
               detail: "本次不会调用外部 AI 服务。",
             });
-            result = generateFallbackAgentAnalysis(agent, input);
+            result = appendWarnings(generateFallbackAgentAnalysis(agent, input), materialWarnings);
           } else {
             onEvent({
               type: "stage",
               message: getAiStageMessage(agent),
               detail: "模型会流式返回结构化 JSON，可在右侧查看实时输出。",
             });
-            result = await streamAnalyzeWithModel({
+            result = appendWarnings(await streamAnalyzeWithModel({
               agent,
               apiKey,
               baseURL,
@@ -375,7 +419,7 @@ export async function POST(request: Request) {
               reasoningEffort,
               signal: request.signal,
               thinkingMode,
-            });
+            }), materialWarnings);
           }
 
           const resultWithStats = withStats({ agent, input, model, provider, result, reasoningEffort, startedAt, thinkingMode });

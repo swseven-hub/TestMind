@@ -83,6 +83,7 @@ import type {
 } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
+const analysisFileAccept = ".pdf,.txt,.log,.md,.json,.jsonl,.csv,.tsv,.yaml,.yml,.xml,.har,.diff,.patch,.sql,.proto,.ts,.tsx,.js,.jsx,.java,.kt,.py,.go,.swift,.c,.cpp,.h";
 
 const categoryStyles: Record<TestCategory, string> = {
   功能: "bg-emerald-50 text-emerald-700 ring-emerald-200",
@@ -1171,6 +1172,70 @@ function PdfUploadDropzone({
   );
 }
 
+function formatLocalFileSize(file: File) {
+  if (file.size >= 1024 * 1024) return `${(file.size / 1024 / 1024).toFixed(2)} MB`;
+  return `${Math.max(1, Math.round(file.size / 1024))} KB`;
+}
+
+function AnalysisFilePicker({
+  description,
+  files,
+  onClear,
+  onOpen,
+  onRemove,
+  title,
+}: {
+  description: string;
+  files: File[];
+  onClear: () => void;
+  onOpen: () => void;
+  onRemove: (index: number) => void;
+  title: string;
+}) {
+  return (
+    <div className="rounded-lg border border-slate-200 bg-slate-50 p-3">
+      <div className="flex items-start justify-between gap-3">
+        <div className="min-w-0">
+          <p className="text-sm font-semibold text-slate-800">{title}</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">{description}</p>
+        </div>
+        <button
+          className="inline-flex h-8 shrink-0 items-center justify-center gap-1.5 rounded-lg bg-white px-2.5 text-xs font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-800 hover:ring-teal-200"
+          type="button"
+          onClick={onOpen}
+        >
+          <UploadCloud className="size-3.5" />
+          上传
+        </button>
+      </div>
+
+      {files.length ? (
+        <div className="mt-3 grid gap-2">
+          {files.map((file, index) => (
+            <div key={`${file.name}-${file.size}-${file.lastModified}-${index}`} className="flex items-center justify-between gap-2 rounded-lg bg-white px-2.5 py-2 text-xs ring-1 ring-slate-200">
+              <span className="min-w-0">
+                <span className="block truncate font-medium text-slate-700">{file.name}</span>
+                <span className="mt-0.5 block text-slate-400">{formatLocalFileSize(file)}</span>
+              </span>
+              <button
+                aria-label={`移除 ${file.name}`}
+                className="grid size-7 shrink-0 place-items-center rounded-md text-slate-400 transition hover:bg-slate-100 hover:text-slate-800"
+                type="button"
+                onClick={() => onRemove(index)}
+              >
+                <X className="size-3.5" />
+              </button>
+            </div>
+          ))}
+          <button className="justify-self-start rounded-md px-2 py-1 text-xs font-medium text-slate-500 transition hover:bg-white hover:text-slate-900" type="button" onClick={onClear}>
+            清空文件
+          </button>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
 function AgentCommandCenter({ value, onChange }: { value: TestAgentType; onChange: (value: TestAgentType) => void }) {
   const activeAgent = agentOptions.find((item) => item.value === value) ?? agentOptions[1];
   const ActiveIcon = activeAgent.icon;
@@ -1435,6 +1500,8 @@ function moduleSectionId(moduleName: string) {
 export default function Home() {
   const inputRef = useRef<HTMLInputElement>(null);
   const reviewInputRef = useRef<HTMLInputElement>(null);
+  const agentMaterialInputRef = useRef<HTMLInputElement>(null);
+  const agentReferenceInputRef = useRef<HTMLInputElement>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const pendingScrollModuleRef = useRef<string | null>(null);
   const [file, setFile] = useState<File | null>(null);
@@ -1451,6 +1518,8 @@ export default function Home() {
   const [error, setError] = useState("");
   const [agentError, setAgentError] = useState("");
   const [agentInput, setAgentInput] = useState("");
+  const [agentMaterialFiles, setAgentMaterialFiles] = useState<File[]>([]);
+  const [agentReferenceFiles, setAgentReferenceFiles] = useState<File[]>([]);
   const [agentResult, setAgentResult] = useState<AgentAnalysisResponse | null>(null);
   const isClientReady = useClientReady();
   const activeAgent = useStoredAgent();
@@ -1604,6 +1673,40 @@ export default function Home() {
     setReviewFile(nextFile);
   }
 
+  function addAgentFiles(fileList: FileList | null, kind: "material" | "reference") {
+    const incoming = Array.from(fileList ?? []);
+    if (!incoming.length) return;
+    setAgentError("");
+    setAgentResult(null);
+
+    const update = (current: File[]) => {
+      const merged = [...current];
+      for (const file of incoming) {
+        const exists = merged.some((item) => item.name === file.name && item.size === file.size && item.lastModified === file.lastModified);
+        if (!exists) merged.push(file);
+      }
+      return merged.slice(0, 8);
+    };
+
+    if (kind === "material") {
+      setAgentMaterialFiles(update);
+      if (agentMaterialInputRef.current) agentMaterialInputRef.current.value = "";
+    } else {
+      setAgentReferenceFiles(update);
+      if (agentReferenceInputRef.current) agentReferenceInputRef.current.value = "";
+    }
+  }
+
+  function removeAgentFile(kind: "material" | "reference", index: number) {
+    setAgentError("");
+    setAgentResult(null);
+    if (kind === "material") {
+      setAgentMaterialFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    } else {
+      setAgentReferenceFiles((current) => current.filter((_, itemIndex) => itemIndex !== index));
+    }
+  }
+
   function clearSavedApiKey() {
     writeStoredValue(apiKeyStorageKey(provider), "");
   }
@@ -1628,7 +1731,11 @@ export default function Home() {
     writeStoredValue(storageKeys.activeAgent, nextAgent);
     setError("");
     setAgentError("");
-    if (nextAgent !== activeAgent && isAnalysisAgent(nextAgent)) setAgentResult(null);
+    if (nextAgent !== activeAgent && isAnalysisAgent(nextAgent)) {
+      setAgentResult(null);
+      setAgentMaterialFiles([]);
+      setAgentReferenceFiles([]);
+    }
   }
 
   function startProgress(title: string, floatingTitle: string, firstLog: ProgressLog) {
@@ -1654,9 +1761,9 @@ export default function Home() {
   }
 
   function getAnalysisInputError() {
-    if (activeAgent === "change-impact") return "请输入至少 20 个字符的 git diff 或 PR 材料。";
-    if (activeAgent === "debug-assistant") return "请输入至少 20 个字符的日志、堆栈或请求材料。";
-    return "请输入至少 20 个字符的发布材料。";
+    if (activeAgent === "change-impact") return "请输入或上传 git diff / PR 材料。";
+    if (activeAgent === "debug-assistant") return "请输入或上传日志、堆栈、请求或依据文档。";
+    return "请输入或上传发布材料。";
   }
 
   function getAgentRunningCopy() {
@@ -1728,7 +1835,8 @@ export default function Home() {
         });
       } else {
         const input = agentInput.trim();
-        if (input.length < 20) {
+        const hasUploadedMaterials = agentMaterialFiles.length > 0 || agentReferenceFiles.length > 0;
+        if (input.length < 20 && !hasUploadedMaterials) {
           const inputError = getAnalysisInputError();
           setAgentError(inputError);
           setProgressStatus("error");
@@ -1738,19 +1846,21 @@ export default function Home() {
           return;
         }
 
+        const formData = new FormData();
+        formData.append("agent", activeAgent);
+        formData.append("input", input);
+        formData.append("provider", provider);
+        formData.append("model", model.trim() || providerModels[provider]);
+        formData.append("thinkingMode", thinkingMode);
+        formData.append("reasoningEffort", reasoningEffort);
+        if (apiKey.trim()) formData.append("apiKey", apiKey.trim());
+        if (provider === "velotric") formData.append("baseURL", baseURL.trim() || providerBaseURLs.velotric || "");
+        for (const uploadedFile of agentMaterialFiles) formData.append("files", uploadedFile);
+        for (const uploadedFile of agentReferenceFiles) formData.append("referenceFiles", uploadedFile);
+
         response = await fetch("/api/agents/analyze/stream", {
           method: "POST",
-          body: JSON.stringify({
-            agent: activeAgent,
-            input,
-            provider,
-            model: model.trim() || providerModels[provider],
-            apiKey: apiKey.trim(),
-            thinkingMode,
-            reasoningEffort,
-            ...(provider === "velotric" ? { baseURL: baseURL.trim() || providerBaseURLs.velotric || "" } : {}),
-          }),
-          headers: { "Content-Type": "application/json" },
+          body: formData,
           signal: abortController.signal,
         });
       }
@@ -2130,6 +2240,22 @@ export default function Home() {
             accept="application/pdf,.pdf"
             onChange={(event) => pickReviewFile(event.target.files?.[0])}
           />
+          <input
+            ref={agentMaterialInputRef}
+            hidden
+            multiple
+            type="file"
+            accept={analysisFileAccept}
+            onChange={(event) => addAgentFiles(event.target.files, "material")}
+          />
+          <input
+            ref={agentReferenceInputRef}
+            hidden
+            multiple
+            type="file"
+            accept={analysisFileAccept}
+            onChange={(event) => addAgentFiles(event.target.files, "reference")}
+          />
           {leftRailCollapsed ? (
             <div className="sticky top-5 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
               <div className="flex items-center justify-center gap-2 lg:flex-col">
@@ -2186,7 +2312,20 @@ export default function Home() {
                   >
                     <UploadCloud className="size-4" />
                   </button>
-                ) : null}
+                ) : (
+                  <button
+                    aria-label="上传分析材料"
+                    className={clsx(
+                      "grid size-11 place-items-center rounded-lg border transition",
+                      agentMaterialFiles.length || agentReferenceFiles.length ? "border-teal-200 bg-teal-50 text-teal-700" : "border-slate-200 bg-slate-50 text-slate-600 hover:text-teal-700",
+                    )}
+                    title={agentMaterialFiles.length || agentReferenceFiles.length ? `已上传 ${agentMaterialFiles.length + agentReferenceFiles.length} 个文件` : "上传分析材料"}
+                    type="button"
+                    onClick={() => agentMaterialInputRef.current?.click()}
+                  >
+                    <UploadCloud className="size-4" />
+                  </button>
+                )}
                 <button
                   aria-label="展开密钥与模型"
                   className={clsx(
@@ -2255,18 +2394,36 @@ export default function Home() {
                 onPick={pickFile}
               />
             ) : (
-              <label className="mt-4 block">
-                <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
-                <textarea
-                  className="mt-1 min-h-64 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
-                  placeholder={currentAgentOption.placeholder}
-                  value={agentInput}
-                  onChange={(event) => {
-                    setAgentInput(event.target.value);
-                    setAgentError("");
-                  }}
+              <div className="mt-4 space-y-3">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">{getAnalysisInputLabel()}</span>
+                  <textarea
+                    className="mt-1 min-h-52 w-full resize-y rounded-lg border border-slate-200 bg-slate-50 px-3 py-3 text-sm leading-6 outline-none transition focus:border-teal-500 focus:bg-white"
+                    placeholder={currentAgentOption.placeholder}
+                    value={agentInput}
+                    onChange={(event) => {
+                      setAgentInput(event.target.value);
+                      setAgentError("");
+                    }}
+                  />
+                </label>
+                <AnalysisFilePicker
+                  description={activeAgent === "debug-assistant" ? "上传 .log、HAR、JSON、diff、patch、PDF 等现场材料。" : "上传发布说明、PR diff、变更列表或接口文档。"}
+                  files={agentMaterialFiles}
+                  title="主材料文件"
+                  onClear={() => setAgentMaterialFiles([])}
+                  onOpen={() => agentMaterialInputRef.current?.click()}
+                  onRemove={(index) => removeAgentFile("material", index)}
                 />
-              </label>
+                <AnalysisFilePicker
+                  description="上传协议、接口规范、字段字典、内部规则等依据文档，AI 会一起参考。"
+                  files={agentReferenceFiles}
+                  title="依据文档"
+                  onClear={() => setAgentReferenceFiles([])}
+                  onOpen={() => agentReferenceInputRef.current?.click()}
+                  onRemove={(index) => removeAgentFile("reference", index)}
+                />
+              </div>
             )}
 
             {isClientReady ? (

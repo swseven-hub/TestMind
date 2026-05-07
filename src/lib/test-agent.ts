@@ -352,7 +352,7 @@ export function generateFallbackAgentAnalysis(agent: TestAgentAnalysisType, inpu
 }
 
 export function buildAgentPrompt(agent: TestAgentAnalysisType, input: string): AgentPrompt {
-  const clippedInput = input.slice(0, 45_000);
+  const clippedInput = input.slice(0, 90_000);
   const commonSchema = `只输出严格 JSON object，不要 Markdown。结构固定为：
 {
   "title": "报告标题",
@@ -424,7 +424,7 @@ ${clippedInput}`,
       system:
         "你是资深故障排查专家、后端研发和测试负责人，专门根据 stacktrace、error log、request、git diff、commit 信息定位疑似根因、涉及模块、可疑提交和修复验证建议。输出中文、短句、可执行。",
       user: `请分析下面 Bug 现场材料，输出 Bug 根因分析报告。要求：
-1. 必须基于输入中的错误信息、堆栈、接口、traceId、request、response、状态码、文件路径、函数名、commit 或 diff 证据判断，不要泛泛而谈。
+1. 必须基于输入中的错误信息、堆栈、接口、traceId、request、response、状态码、文件路径、函数名、commit、diff 或依据文档证据判断，不要泛泛而谈。
 2. 必须包含：疑似根因、涉及模块、请求与现场、可疑提交、相似历史 Bug、修复建议、验证建议。
 3. 如果没有历史缺陷/事故材料，相似历史 Bug 必须明确写“未接入历史数据，无法确认真实相似 Bug”，不能编造历史案例。
 4. 如果发现 5xx、支付/订单/权限/登录、数据写入、缓存、消息队列、回调、超时、空指针、类型错误、SQL、配置或环境差异，要提高优先级。
