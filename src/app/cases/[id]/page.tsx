@@ -22,7 +22,7 @@ import {
 import clsx from "clsx";
 import { demoGenerateResponse } from "@/lib/demo-test-cases";
 import { downloadExcel } from "@/lib/download-excel";
-import { formatDuration, formatTokens, useRunHistory } from "@/lib/run-history";
+import { formatDuration, formatTokens, isCaseRunHistoryRecord, useRunHistory, type CaseRunHistoryRecord } from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type { GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
 
@@ -288,7 +288,7 @@ export default function CaseDetailPage() {
     resetPage();
   }
 
-  const record = history.find((item) => item.id === id) ?? null;
+  const record = history.find((item): item is CaseRunHistoryRecord => item.id === id && isCaseRunHistoryRecord(item)) ?? null;
   const result = id === "demo" ? demoGenerateResponse : record?.result ?? (id === "current" ? currentReport : null);
   const stats = result?.stats;
 

@@ -34,7 +34,17 @@ import clsx from "clsx";
 import { downloadExcel } from "@/lib/download-excel";
 import { buildCoverageReview, caseReviewStatuses, getCaseIdentity, getCaseReviewStatus, type CaseReviewStatus, type CoverageReviewIssue } from "@/lib/case-review";
 import { providerLabels, reasoningEffortLabels, thinkingModeLabels } from "@/lib/model-config";
-import { clearRunHistory, formatDuration, formatRunTime, formatTokens, removeRunHistoryRecord, updateRunHistoryCaseStatuses, useRunHistory, type RunHistoryRecord } from "@/lib/run-history";
+import {
+  clearRunHistory,
+  formatDuration,
+  formatRunTime,
+  formatTokens,
+  isCaseRunHistoryRecord,
+  removeRunHistoryRecord,
+  updateRunHistoryCaseStatuses,
+  useRunHistory,
+  type CaseRunHistoryRecord,
+} from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
 import type { RunStatus, TestCase, TestCategory, TestPriority } from "@/types/test-case";
 
@@ -158,7 +168,7 @@ function groupCases(cases: TestCase[]) {
   return [...data.entries()].map(([moduleName, items]) => ({ moduleName, cases: items }));
 }
 
-function getModuleDurationLabel(record: RunHistoryRecord | null, moduleName: string) {
+function getModuleDurationLabel(record: CaseRunHistoryRecord | null, moduleName: string) {
   const moduleStat = record?.result.stats?.modules.find((item) => item.name === moduleName);
   return moduleStat?.durationMs ? ` · ${formatDuration(moduleStat.durationMs)}` : "";
 }
@@ -258,7 +268,7 @@ function formatJsonPreview(value: unknown) {
   }
 }
 
-function createExportResult(record: RunHistoryRecord, cases: TestCase[], suffix: string) {
+function createExportResult(record: CaseRunHistoryRecord, cases: TestCase[], suffix: string) {
   const baseName = record.result.fileName.replace(/\.pdf$/i, "");
   return {
     ...record.result,
@@ -352,7 +362,8 @@ function CoverageReviewPanel({
 }
 
 export default function HistoryPage() {
-  const history = useRunHistory();
+  const allHistory = useRunHistory();
+  const history = useMemo(() => allHistory.filter(isCaseRunHistoryRecord), [allHistory]);
   const [activeId, setActiveId] = useState("");
   const [activeModule, setActiveModule] = useState("全部");
   const [activeReviewStatus, setActiveReviewStatus] = useState<CaseReviewStatus | "全部">("全部");
@@ -492,7 +503,7 @@ export default function HistoryPage() {
   async function clearRecords() {
     setError("");
     try {
-      await clearRunHistory();
+      await clearRunHistory("case-generator");
       setActiveId("");
       setActiveModule("全部");
       setActiveReviewStatus("全部");
@@ -546,8 +557,8 @@ export default function HistoryPage() {
               <ArrowLeft className="size-5" />
             </Link>
             <div>
-              <h1 className="text-xl font-semibold">运行记录</h1>
-              <p className="text-sm text-slate-500">共保存 {history.length} 次运行记录，包含成功、失败和已停止任务</p>
+              <h1 className="text-xl font-semibold">用例运行记录</h1>
+              <p className="text-sm text-slate-500">共保存 {history.length} 次用例生成记录，包含成功、失败和已停止任务</p>
             </div>
           </div>
           <div className="flex flex-wrap gap-2">
@@ -645,7 +656,7 @@ export default function HistoryPage() {
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
                 <div className="flex items-center justify-between gap-3">
                   <div>
-                    <h2 className="font-semibold">运行记录</h2>
+                    <h2 className="font-semibold">用例运行记录</h2>
                     <p className="mt-0.5 text-xs text-slate-500">{history.length} 次生成结果</p>
                   </div>
                   <button

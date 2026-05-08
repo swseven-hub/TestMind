@@ -10,13 +10,12 @@ import {
   ChevronLeft,
   ChevronRight,
   FileText,
-  History,
   ListChecks,
   Search,
 } from "lucide-react";
 import clsx from "clsx";
 import { providerLabels, reasoningEffortLabels, thinkingModeLabels } from "@/lib/model-config";
-import { formatDuration } from "@/lib/run-history";
+import { formatDuration, isAnalysisRunHistoryRecord, useRunHistory, type AnalysisRunHistoryRecord } from "@/lib/run-history";
 import type { AgentAnalysisItem, AgentAnalysisResponse, AgentAnalysisSection, TestPriority } from "@/types/test-case";
 
 const currentAgentAnalysisStorageKey = "testmind.currentAgentAnalysis.v1";
@@ -149,7 +148,8 @@ function AnalysisItemCard({ item, section }: { item: AgentAnalysisItem; section:
 export default function AnalysisDetailPage() {
   const params = useParams<{ id: string }>();
   const id = decodeURIComponent(String(params.id ?? ""));
-  const [result, setResult] = useState<AgentAnalysisResponse | null>(null);
+  const history = useRunHistory();
+  const [currentResult, setCurrentResult] = useState<AgentAnalysisResponse | null>(null);
   const [activeSection, setActiveSection] = useState("全部");
   const [activePriority, setActivePriority] = useState<TestPriority | "全部">("全部");
   const [query, setQuery] = useState("");
@@ -157,10 +157,12 @@ export default function AnalysisDetailPage() {
   const [currentPage, setCurrentPage] = useState(1);
 
   useEffect(() => {
-    const timer = window.setTimeout(() => setResult(readCurrentAnalysis()), 0);
+    const timer = window.setTimeout(() => setCurrentResult(readCurrentAnalysis()), 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  const record = history.find((item): item is AnalysisRunHistoryRecord => item.id === id && isAnalysisRunHistoryRecord(item)) ?? null;
+  const result = record?.analysisResult ?? (id === currentResult?.agent || id === "current" ? currentResult : null);
   const itemCount = useMemo(() => (result ? result.sections.reduce((sum, section) => sum + section.items.length, 0) : 0), [result]);
   const p0Count = useMemo(() => (result ? result.sections.reduce((sum, section) => sum + section.items.filter((item) => item.priority === "P0").length, 0) : 0), [result]);
 
@@ -219,14 +221,6 @@ export default function AnalysisDetailPage() {
               </div>
             </div>
             <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row sm:flex-wrap sm:items-center">
-              <Link
-                className="inline-flex h-10 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto"
-                href="/history"
-                title="查看运行记录"
-              >
-                <History className="size-4" />
-                运行记录
-              </Link>
               <Link className="inline-flex h-10 w-full min-w-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50 sm:w-auto" href="/">
                 <ArrowLeft className="size-4" />
                 返回工作台

@@ -45,7 +45,17 @@ import {
   type Provider,
   normalizeReasoningEffort,
 } from "@/lib/model-config";
-import { formatDuration, formatTokens, refreshRunHistory, storageChangeEvent, subscribeStorage, useRunHistory } from "@/lib/run-history";
+import {
+  formatDuration,
+  formatRunTime,
+  formatTokens,
+  isAnalysisRunHistoryRecord,
+  refreshRunHistory,
+  storageChangeEvent,
+  subscribeStorage,
+  useRunHistory,
+  type RunHistoryRecord,
+} from "@/lib/run-history";
 import { normalizeTestAgent } from "@/lib/test-agent";
 import type {
   AgentAnalysisItem,
@@ -232,6 +242,7 @@ function getCaseDetailHref(result: GenerateResponse) {
 }
 
 function getAnalysisDetailHref(result: AgentAnalysisResponse) {
+  if (result.historyId) return `/analysis/${encodeURIComponent(result.historyId)}`;
   return `/analysis/${encodeURIComponent(result.agent)}`;
 }
 
@@ -257,6 +268,33 @@ function isAnalysisAgent(agent: TestAgentType): agent is TestAgentAnalysisType {
 
 function agentInputKind(agent: TestAgentType) {
   return agent === "requirement-review" || agent === "case-generator" ? "PDF" : "文本";
+}
+
+const runHistoryStatusLabels = {
+  success: "成功",
+  failed: "失败",
+  cancelled: "已停止",
+};
+
+const runHistoryStatusStyles = {
+  success: "bg-emerald-50 text-emerald-700 ring-emerald-200",
+  failed: "bg-rose-50 text-rose-700 ring-rose-200",
+  cancelled: "bg-amber-50 text-amber-700 ring-amber-200",
+};
+
+function getRunHistoryHref(record: RunHistoryRecord) {
+  if (isAnalysisRunHistoryRecord(record)) return `/analysis/${encodeURIComponent(record.id)}`;
+  return `/cases/${encodeURIComponent(record.id)}`;
+}
+
+function getRunHistoryTitle(record: RunHistoryRecord) {
+  if (isAnalysisRunHistoryRecord(record)) return record.analysisResult.title || record.fileName;
+  return record.fileName;
+}
+
+function getRunHistoryCountLabel(record: RunHistoryRecord) {
+  if (isAnalysisRunHistoryRecord(record)) return `${record.caseCount} 项分析`;
+  return `${record.caseCount} 条测试点`;
 }
 
 function writeStoredBoolean(key: string, value: boolean) {
@@ -966,6 +1004,62 @@ function AgentRail({
   );
 }
 
+function AgentRunHistoryPanel({ activeAgent, records }: { activeAgent: TestAgentType; records: RunHistoryRecord[] }) {
+  const agent = agentOptions.find((item) => item.value === activeAgent) ?? agentOptions[1];
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <History className="size-4" />
+            运行记录
+          </div>
+          <h2 className="mt-1 text-base font-semibold text-slate-900">{agent.label}</h2>
+          <p className="mt-1 text-sm text-slate-500">当前智能体已保存 {records.length} 次运行记录</p>
+        </div>
+        <span className="self-start rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200 sm:self-auto">
+          {agent.shortLabel} / {agentInputKind(activeAgent)}
+        </span>
+      </div>
+
+      {records.length ? (
+        <div className="mt-4 grid max-h-72 gap-2 overflow-y-auto pr-1 lg:grid-cols-2">
+          {records.map((record) => (
+            <Link
+              key={record.id}
+              className="block min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-3 text-left transition hover:border-teal-200 hover:bg-teal-50"
+              href={getRunHistoryHref(record)}
+            >
+              <div className="flex min-w-0 items-start justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="truncate text-sm font-semibold text-slate-800">{getRunHistoryTitle(record)}</p>
+                  <p className="mt-1 truncate text-xs text-slate-500">
+                    {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {getRunHistoryCountLabel(record)}
+                  </p>
+                </div>
+                <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-xs font-medium ring-1", runHistoryStatusStyles[record.status])}>
+                  {runHistoryStatusLabels[record.status]}
+                </span>
+              </div>
+              <p className="mt-2 truncate text-xs text-slate-400">
+                {record.model}
+                {record.thinkingMode ? ` · ${thinkingModeLabels[record.thinkingMode]}` : ""}
+                {record.durationMs !== undefined ? ` · ${formatDuration(record.durationMs)}` : ""}
+              </p>
+            </Link>
+          ))}
+        </div>
+      ) : (
+        <div className="mt-4 rounded-lg border border-dashed border-slate-300 bg-slate-50 px-4 py-5 text-center">
+          <p className="text-sm font-medium text-slate-700">暂无当前智能体的运行记录</p>
+          <p className="mt-1 text-xs leading-5 text-slate-500">运行完成后会自动出现在这里。</p>
+        </div>
+      )}
+    </section>
+  );
+}
+
 function priorityBadgeClass(priority?: string) {
   if (priority === "P0") return "bg-rose-50 text-rose-700 ring-rose-200";
   if (priority === "P1") return "bg-amber-50 text-amber-700 ring-amber-200";
@@ -991,12 +1085,14 @@ function AgentAnalysisWorkspace({
   actionSlot,
   activeAgent,
   error,
+  historySlot,
   isRunning,
   result,
 }: {
   actionSlot?: ReactNode;
   activeAgent: TestAgentType;
   error: string;
+  historySlot?: ReactNode;
   isRunning: boolean;
   result: AgentAnalysisResponse | null;
 }) {
@@ -1041,6 +1137,8 @@ function AgentAnalysisWorkspace({
           </div>
         ) : null}
       </div>
+
+      {historySlot}
 
       {isRunning ? (
         <div className="grid min-h-[220px] place-items-center rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
@@ -1235,6 +1333,7 @@ export default function Home() {
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
   const idleEventMs = lastEventAt ? now - lastEventAt : elapsedMs;
   const workspaceGridClass = leftRailCollapsed ? "lg:grid-cols-[72px_minmax(0,1fr)]" : "lg:grid-cols-[280px_minmax(0,1fr)]";
+  const currentAgentHistory = useMemo(() => runHistory.filter((record) => record.agent === activeAgent), [activeAgent, runHistory]);
 
   const moduleCounts = useMemo(() => {
     const data: Record<string, number> = {};
@@ -1484,6 +1583,7 @@ export default function Home() {
 
       if (!finalResult) throw new Error("智能体分析结束但没有收到分析结果。");
 
+      await refreshRunHistory();
       setProgressStatus("success");
       setRunCompletedAt(getNowMs());
     } catch (caught) {
@@ -1845,14 +1945,6 @@ export default function Home() {
             ) : null}
             <Link
               className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
-              href="/history"
-              title={runHistory.length ? `数据库已保存 ${runHistory.length} 次生成结果` : "查看运行记录"}
-            >
-              <History className="size-4" />
-              运行记录
-            </Link>
-            <Link
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
               href="/settings"
               title="配置供应商、密钥和模型"
             >
@@ -1907,10 +1999,18 @@ export default function Home() {
 
         <section id="case-results" className="min-w-0 space-y-3 overflow-y-auto px-3 py-3 sm:px-4">
           {analysisMode ? (
-            <AgentAnalysisWorkspace actionSlot={renderExecutionPanel(true)} activeAgent={activeAgent} error={agentError} isRunning={isAgentRunning} result={agentResult} />
+            <AgentAnalysisWorkspace
+              actionSlot={renderExecutionPanel(true)}
+              activeAgent={activeAgent}
+              error={agentError}
+              historySlot={<AgentRunHistoryPanel activeAgent={activeAgent} records={currentAgentHistory} />}
+              isRunning={isAgentRunning}
+              result={agentResult}
+            />
           ) : (
             <>
               {renderExecutionPanel()}
+              <AgentRunHistoryPanel activeAgent={activeAgent} records={currentAgentHistory} />
               {result ? (
                 <>
                   <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">

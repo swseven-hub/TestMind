@@ -18,6 +18,7 @@ import {
   normalizeAnalysisAgent,
 } from "@/lib/test-agent";
 import { prepareAgentMaterial } from "@/lib/server/agent-material";
+import { saveRunHistoryRecord } from "@/lib/server/run-history-db";
 import type {
   AgentAnalysisResponse,
   ReasoningEffort,
@@ -178,12 +179,63 @@ function getTextInputError(agent: TestAgentAnalysisType) {
   return "请输入或上传发布材料。";
 }
 
+function getAnalysisRecordFileName(agent: TestAgentAnalysisType, file: File | null, body: AnalyzeBody) {
+  if (file) return file.name;
+  const fileNames = [...body.materialFiles, ...body.referenceFiles].map((item) => item.name).filter(Boolean);
+  if (fileNames.length === 1) return fileNames[0];
+  if (fileNames.length > 1) return `${fileNames[0]} 等 ${fileNames.length} 个文件`;
+  if (agent === "change-impact") return "变更影响分析";
+  if (agent === "debug-assistant") return "Bug 根因分析";
+  return "发布风险分析";
+}
+
 function appendWarnings(result: AgentAnalysisResponse, warnings: string[]) {
   if (!warnings.length) return result;
   return {
     ...result,
     warnings: [...result.warnings, ...warnings],
   } satisfies AgentAnalysisResponse;
+}
+
+function persistAnalysisResult({
+  agent,
+  body,
+  file,
+  model,
+  provider,
+  result,
+  thinkingMode,
+}: {
+  agent: TestAgentAnalysisType;
+  body: AnalyzeBody;
+  file: File | null;
+  model: string;
+  provider: Provider;
+  result: AgentAnalysisResponse;
+  thinkingMode: ThinkingMode;
+}) {
+  try {
+    const savedRecord = saveRunHistoryRecord({
+      agent,
+      status: "success",
+      fileName: getAnalysisRecordFileName(agent, file, body),
+      createdAt: result.stats?.startedAt,
+      completedAt: result.stats?.completedAt,
+      provider,
+      model,
+      ...(provider === "aliyun" ? { thinkingMode } : {}),
+      result,
+    });
+    return {
+      ...result,
+      historyId: savedRecord.id,
+    } satisfies AgentAnalysisResponse;
+  } catch (error) {
+    return {
+      ...result,
+      warnings: [...result.warnings, `运行记录保存失败：${error instanceof Error ? error.message : "未知错误"}`],
+    } satisfies AgentAnalysisResponse;
+  }
 }
 
 async function analyzeWithModel({
@@ -275,7 +327,8 @@ export async function POST(request: Request) {
 
     if (!apiKey) {
       const fallback = appendWarnings(generateFallbackAgentAnalysis(agent, input), materialWarnings);
-      return NextResponse.json(withStats({ agent, input, model, provider, result: fallback, startedAt, thinkingMode, reasoningEffort }));
+      const resultWithStats = withStats({ agent, input, model, provider, result: fallback, startedAt, thinkingMode, reasoningEffort });
+      return NextResponse.json(persistAnalysisResult({ agent, body, file, model, provider, result: resultWithStats, thinkingMode }));
     }
 
     const result = appendWarnings(await analyzeWithModel({
@@ -289,7 +342,8 @@ export async function POST(request: Request) {
       thinkingMode,
     }), materialWarnings);
 
-    return NextResponse.json(withStats({ agent, input, model, provider, result, startedAt, thinkingMode, reasoningEffort }));
+    const resultWithStats = withStats({ agent, input, model, provider, result, startedAt, thinkingMode, reasoningEffort });
+    return NextResponse.json(persistAnalysisResult({ agent, body, file, model, provider, result: resultWithStats, thinkingMode }));
   } catch (error) {
     console.error(error);
     return NextResponse.json({ message: error instanceof Error ? error.message : "智能体分析失败，请稍后重试。" }, { status: 500 });

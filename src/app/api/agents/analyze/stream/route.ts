@@ -17,6 +17,7 @@ import {
   normalizeAnalysisAgent,
 } from "@/lib/test-agent";
 import { prepareAgentMaterial } from "@/lib/server/agent-material";
+import { saveRunHistoryRecord } from "@/lib/server/run-history-db";
 import type {
   AgentAnalysisResponse,
   ReasoningEffort,
@@ -184,6 +185,16 @@ function getAiStageMessage(agent: TestAgentAnalysisType) {
   if (agent === "change-impact") return "AI 正在分析变更影响";
   if (agent === "debug-assistant") return "AI 正在分析 Bug 根因";
   return "AI 正在分析发布风险";
+}
+
+function getAnalysisRecordFileName(agent: TestAgentAnalysisType, file: File | null, body: AnalyzeBody) {
+  if (file) return file.name;
+  const fileNames = [...body.materialFiles, ...body.referenceFiles].map((item) => item.name).filter(Boolean);
+  if (fileNames.length === 1) return fileNames[0];
+  if (fileNames.length > 1) return `${fileNames[0]} 等 ${fileNames.length} 个文件`;
+  if (agent === "change-impact") return "变更影响分析";
+  if (agent === "debug-assistant") return "Bug 根因分析";
+  return "发布风险分析";
 }
 
 function appendWarnings(result: AgentAnalysisResponse, warnings: string[]) {
@@ -422,7 +433,35 @@ export async function POST(request: Request) {
             }), materialWarnings);
           }
 
-          const resultWithStats = withStats({ agent, input, model, provider, result, reasoningEffort, startedAt, thinkingMode });
+          let resultWithStats = withStats({ agent, input, model, provider, result, reasoningEffort, startedAt, thinkingMode });
+          try {
+            const savedRecord = saveRunHistoryRecord({
+              agent,
+              status: "success",
+              fileName: getAnalysisRecordFileName(agent, file, body),
+              createdAt: resultWithStats.stats?.startedAt,
+              completedAt: resultWithStats.stats?.completedAt,
+              provider,
+              model,
+              ...(provider === "aliyun" ? { thinkingMode } : {}),
+              result: resultWithStats,
+            });
+            resultWithStats = {
+              ...resultWithStats,
+              historyId: savedRecord.id,
+            };
+            onEvent({
+              type: "stage",
+              message: "运行记录已保存",
+              detail: `当前智能体记录：${savedRecord.id}`,
+            });
+          } catch (saveError) {
+            resultWithStats = {
+              ...resultWithStats,
+              warnings: [...resultWithStats.warnings, `运行记录保存失败：${getErrorMessage(saveError)}`],
+            };
+          }
+
           onEvent({
             type: "stage",
             message: "分析结果已整理完成",

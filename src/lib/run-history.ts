@@ -2,12 +2,22 @@ import { useEffect, useState } from "react";
 
 import type { Provider } from "@/lib/model-config";
 import type { CaseReviewStatus } from "@/lib/case-review";
-import type { GenerateResponse, GenerationUsage, RunStatus, TestCase, ThinkingMode } from "@/types/test-case";
+import type {
+  AgentAnalysisResponse,
+  GenerateResponse,
+  GenerationUsage,
+  RunStatus,
+  TestAgentAnalysisType,
+  TestAgentType,
+  TestCase,
+  ThinkingMode,
+} from "@/types/test-case";
 
 export type RunHistoryProvider = Provider;
 
-export type RunHistoryRecord = {
+type RunHistoryBase = {
   id: string;
+  agent: TestAgentType;
   status: RunStatus;
   createdAt: string;
   completedAt?: string;
@@ -24,8 +34,19 @@ export type RunHistoryRecord = {
   errorDetail?: string;
   errorRaw?: string;
   lastEvent?: unknown;
+};
+
+export type CaseRunHistoryRecord = RunHistoryBase & {
+  agent: "case-generator";
   result: GenerateResponse;
 };
+
+export type AnalysisRunHistoryRecord = RunHistoryBase & {
+  agent: TestAgentAnalysisType;
+  analysisResult: AgentAnalysisResponse;
+};
+
+export type RunHistoryRecord = CaseRunHistoryRecord | AnalysisRunHistoryRecord;
 
 export const storageChangeEvent = "testmind.storage-change";
 const legacyRunHistoryStorageKey = "testmind.runHistory.v1";
@@ -49,9 +70,53 @@ function dispatchHistoryChange() {
   if (typeof window !== "undefined") window.dispatchEvent(new Event(historyChangeEvent));
 }
 
-function isRunHistoryRecord(value: unknown): value is RunHistoryRecord {
-  const record = value as RunHistoryRecord;
-  return Boolean(record?.id && record?.result && Array.isArray(record.result.cases));
+function normalizeHistoryAgent(value: unknown): TestAgentType {
+  if (value === "requirement-review" || value === "release-risk" || value === "case-generator" || value === "change-impact" || value === "debug-assistant") return value;
+  return "case-generator";
+}
+
+function isGenerateResponse(value: unknown): value is GenerateResponse {
+  const result = value as GenerateResponse;
+  return Boolean(result?.fileName && Array.isArray(result.cases));
+}
+
+function isAgentAnalysisResponse(value: unknown): value is AgentAnalysisResponse {
+  const result = value as AgentAnalysisResponse;
+  return Boolean(result?.agent && Array.isArray(result.sections));
+}
+
+export function isCaseRunHistoryRecord(record: RunHistoryRecord): record is CaseRunHistoryRecord {
+  return record.agent === "case-generator";
+}
+
+export function isAnalysisRunHistoryRecord(record: RunHistoryRecord): record is AnalysisRunHistoryRecord {
+  return record.agent !== "case-generator";
+}
+
+function normalizeRunHistoryRecord(value: unknown): RunHistoryRecord | null {
+  const record = value as Partial<RunHistoryRecord> & {
+    agent?: unknown;
+    result?: unknown;
+    analysisResult?: unknown;
+  };
+  if (!record?.id || !record.fileName || !record.provider || !record.model) return null;
+
+  const agent = normalizeHistoryAgent(record.agent);
+  if (agent === "case-generator") {
+    if (!isGenerateResponse(record.result)) return null;
+    return {
+      ...record,
+      agent,
+      result: record.result,
+    } as CaseRunHistoryRecord;
+  }
+
+  if (!isAgentAnalysisResponse(record.analysisResult)) return null;
+  return {
+    ...record,
+    agent,
+    analysisResult: record.analysisResult,
+  } as AnalysisRunHistoryRecord;
 }
 
 function readLegacyRunHistory(): RunHistoryRecord[] {
@@ -61,7 +126,7 @@ function readLegacyRunHistory(): RunHistoryRecord[] {
     const raw = window.localStorage.getItem(legacyRunHistoryStorageKey);
     if (!raw) return [];
     const parsed = JSON.parse(raw) as unknown;
-    return Array.isArray(parsed) ? parsed.filter(isRunHistoryRecord) : [];
+    return Array.isArray(parsed) ? parsed.map(normalizeRunHistoryRecord).filter((item): item is RunHistoryRecord => Boolean(item)) : [];
   } catch {
     return [];
   }
@@ -94,7 +159,7 @@ export async function refreshRunHistory() {
     const response = await fetch("/api/run-history", { cache: "no-store" });
     if (!response.ok) throw new Error("读取运行记录失败。");
     const payload = (await response.json()) as { records?: RunHistoryRecord[] };
-    runHistoryCache = Array.isArray(payload.records) ? payload.records.filter(isRunHistoryRecord) : [];
+    runHistoryCache = Array.isArray(payload.records) ? payload.records.map(normalizeRunHistoryRecord).filter((item): item is RunHistoryRecord => Boolean(item)) : [];
     dispatchHistoryChange();
   } catch {
     dispatchHistoryChange();
@@ -130,8 +195,9 @@ export async function updateRunHistoryCaseStatuses(
   return refreshRunHistory();
 }
 
-export async function clearRunHistory() {
-  const response = await fetch("/api/run-history", { method: "DELETE" });
+export async function clearRunHistory(agent?: TestAgentType) {
+  const query = agent ? `?agent=${encodeURIComponent(agent)}` : "";
+  const response = await fetch(`/api/run-history${query}`, { method: "DELETE" });
   if (!response.ok) throw new Error("清空运行记录失败。");
   return refreshRunHistory();
 }

@@ -1,14 +1,23 @@
 import { NextRequest, NextResponse } from "next/server";
 
-import { clearRunHistoryRecords, deleteRunHistoryRecord, listRunHistoryRecords, saveRunHistoryRecord, updateRunHistoryCaseStatuses } from "@/lib/server/run-history-db";
+import {
+  clearRunHistoryRecords,
+  deleteRunHistoryRecord,
+  deleteRunHistoryRecordsByAgent,
+  listRunHistoryRecords,
+  saveRunHistoryRecord,
+  updateRunHistoryCaseStatuses,
+} from "@/lib/server/run-history-db";
 import { normalizeCaseReviewStatus } from "@/lib/case-review";
 import { normalizeProvider, normalizeThinkingMode } from "@/lib/model-config";
-import type { GenerateResponse, RunStatus, TestCase, TestCategory, TestPriority } from "@/types/test-case";
+import { normalizeTestAgent } from "@/lib/test-agent";
+import type { GenerateResponse, RunStatus, TestAgentType, TestCase, TestCategory, TestPriority } from "@/types/test-case";
 
 export const runtime = "nodejs";
 
 type IncomingRecord = {
   id?: string;
+  agent?: TestAgentType;
   status?: RunStatus;
   createdAt?: string;
   completedAt?: string;
@@ -74,6 +83,7 @@ function normalizeIncomingRecord(record: IncomingRecord) {
   if (!record.result || !Array.isArray(record.result.cases)) return null;
   return {
     id: record.id,
+    agent: normalizeTestAgent(record.agent || "case-generator"),
     status: record.status ?? "success",
     createdAt: record.createdAt,
     completedAt: record.completedAt,
@@ -132,8 +142,11 @@ export async function PATCH(request: NextRequest) {
 
 export async function DELETE(request: NextRequest) {
   const id = request.nextUrl.searchParams.get("id");
+  const agent = request.nextUrl.searchParams.get("agent");
   if (id) {
     deleteRunHistoryRecord(id);
+  } else if (agent) {
+    deleteRunHistoryRecordsByAgent(normalizeTestAgent(agent));
   } else {
     clearRunHistoryRecords();
   }

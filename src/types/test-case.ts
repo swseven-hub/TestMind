@@ -154,6 +154,7 @@ export type AgentAnalysisStats = {
 export type AgentAnalysisResponse = {
   agent: TestAgentAnalysisType;
   source: "ai" | "fallback";
+  historyId?: string;
   title: string;
   summary: string;
   sections: AgentAnalysisSection[];

@@ -2,12 +2,22 @@ import { existsSync, mkdirSync } from "node:fs";
 import path from "node:path";
 import { DatabaseSync } from "node:sqlite";
 
-import type { GenerateResponse, GenerationUsage, RunStatus, TestCase, ThinkingMode } from "@/types/test-case";
+import type {
+  AgentAnalysisResponse,
+  GenerateResponse,
+  GenerationUsage,
+  RunStatus,
+  TestAgentAnalysisType,
+  TestAgentType,
+  TestCase,
+  ThinkingMode,
+} from "@/types/test-case";
 import type { Provider } from "@/lib/model-config";
 import type { CaseReviewStatus } from "@/lib/case-review";
 
-export type StoredRunHistoryRecord = {
+type StoredRunHistoryBase = {
   id: string;
+  agent: TestAgentType;
   status: RunStatus;
   createdAt: string;
   completedAt?: string;
@@ -24,11 +34,23 @@ export type StoredRunHistoryRecord = {
   errorDetail?: string;
   errorRaw?: string;
   lastEvent?: unknown;
+};
+
+export type StoredCaseRunHistoryRecord = StoredRunHistoryBase & {
+  agent: "case-generator";
   result: GenerateResponse;
 };
 
+export type StoredAnalysisRunHistoryRecord = StoredRunHistoryBase & {
+  agent: TestAgentAnalysisType;
+  analysisResult: AgentAnalysisResponse;
+};
+
+export type StoredRunHistoryRecord = StoredCaseRunHistoryRecord | StoredAnalysisRunHistoryRecord;
+
 type RunHistoryRow = {
   id: string;
+  agent: TestAgentType | null;
   status: RunStatus | null;
   created_at: string;
   completed_at: string | null;
@@ -63,6 +85,7 @@ function getDatabase() {
   database.exec(`
     CREATE TABLE IF NOT EXISTS run_history (
       id TEXT PRIMARY KEY,
+      agent TEXT NOT NULL DEFAULT 'case-generator',
       status TEXT NOT NULL DEFAULT 'success',
       created_at TEXT NOT NULL,
       completed_at TEXT,
@@ -93,6 +116,7 @@ function getDatabase() {
 function migrateRunHistoryTable(db: DatabaseSync) {
   const columns = new Set((db.prepare("PRAGMA table_info(run_history)").all() as Array<{ name: string }>).map((item) => item.name));
   const additions: Array<[string, string]> = [
+    ["agent", "ALTER TABLE run_history ADD COLUMN agent TEXT NOT NULL DEFAULT 'case-generator'"],
     ["status", "ALTER TABLE run_history ADD COLUMN status TEXT NOT NULL DEFAULT 'success'"],
     ["completed_at", "ALTER TABLE run_history ADD COLUMN completed_at TEXT"],
     ["failed_stage", "ALTER TABLE run_history ADD COLUMN failed_stage TEXT"],
@@ -105,19 +129,52 @@ function migrateRunHistoryTable(db: DatabaseSync) {
   for (const [name, statement] of additions) {
     if (!columns.has(name)) db.exec(statement);
   }
+  db.exec("CREATE INDEX IF NOT EXISTS idx_run_history_agent_created_at ON run_history(agent, created_at DESC)");
 }
 
 function createId() {
   return `${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
 }
 
-function getModuleCount(result: GenerateResponse) {
-  return new Set(result.cases.map((item) => item.module)).size;
+function normalizeHistoryAgent(value: unknown): TestAgentType {
+  if (value === "requirement-review" || value === "release-risk" || value === "case-generator" || value === "change-impact" || value === "debug-assistant") return value;
+  return "case-generator";
+}
+
+function isGenerateResponse(value: unknown): value is GenerateResponse {
+  const result = value as GenerateResponse;
+  return Boolean(result?.fileName && Array.isArray(result.cases));
+}
+
+function isAgentAnalysisResponse(value: unknown): value is AgentAnalysisResponse {
+  const result = value as AgentAnalysisResponse;
+  return Boolean(result?.agent && Array.isArray(result.sections));
+}
+
+function getPayloadItemCount(result: GenerateResponse | AgentAnalysisResponse) {
+  if (isGenerateResponse(result)) return result.cases.length;
+  return result.sections.reduce((sum, section) => sum + section.items.length, 0);
+}
+
+function getModuleCount(result: GenerateResponse | AgentAnalysisResponse) {
+  if (isGenerateResponse(result)) return new Set(result.cases.map((item) => item.module)).size;
+  return result.sections.length;
+}
+
+function getPayloadFileName(agent: TestAgentType, result: GenerateResponse | AgentAnalysisResponse, fileName?: string) {
+  if (fileName?.trim()) return fileName.trim();
+  if (isGenerateResponse(result)) return result.fileName;
+  if (agent === "requirement-review") return "需求分析结果";
+  if (agent === "change-impact") return "变更影响分析";
+  if (agent === "debug-assistant") return "Bug 根因分析";
+  return "发布风险分析";
 }
 
 function rowToRecord(row: RunHistoryRow): StoredRunHistoryRecord | null {
   try {
-    const result = JSON.parse(row.result_json) as GenerateResponse;
+    const payload = JSON.parse(row.result_json) as GenerateResponse | AgentAnalysisResponse;
+    let agent = normalizeHistoryAgent(row.agent);
+    if (agent === "case-generator" && isAgentAnalysisResponse(payload)) agent = payload.agent;
     const lastEvent = row.last_event_json ? JSON.parse(row.last_event_json) : undefined;
     const usage =
       row.total_tokens === null
@@ -129,8 +186,9 @@ function rowToRecord(row: RunHistoryRow): StoredRunHistoryRecord | null {
             ...(row.reasoning_tokens === null ? {} : { reasoningTokens: row.reasoning_tokens }),
           };
 
-    return {
+    const common = {
       id: row.id,
+      agent,
       status: row.status ?? "success",
       createdAt: row.created_at,
       ...(row.completed_at ? { completedAt: row.completed_at } : {}),
@@ -147,7 +205,22 @@ function rowToRecord(row: RunHistoryRow): StoredRunHistoryRecord | null {
       ...(row.error_detail ? { errorDetail: row.error_detail } : {}),
       ...(row.error_raw ? { errorRaw: row.error_raw } : {}),
       ...(lastEvent ? { lastEvent } : {}),
-      result,
+    };
+
+    if (agent === "case-generator") {
+      if (!isGenerateResponse(payload)) return null;
+      return {
+        ...common,
+        agent,
+        result: payload,
+      };
+    }
+
+    if (!isAgentAnalysisResponse(payload)) return null;
+    return {
+      ...common,
+      agent,
+      analysisResult: payload,
     };
   } catch {
     return null;
@@ -162,6 +235,8 @@ export function listRunHistoryRecords() {
 
 export function saveRunHistoryRecord(input: {
   id?: string;
+  agent?: TestAgentType;
+  fileName?: string;
   createdAt?: string;
   completedAt?: string;
   status?: RunStatus;
@@ -173,18 +248,23 @@ export function saveRunHistoryRecord(input: {
   errorDetail?: string;
   errorRaw?: string;
   lastEvent?: unknown;
-  result: GenerateResponse;
+  result: GenerateResponse | AgentAnalysisResponse;
 }) {
   const db = getDatabase();
   const id = input.id || createId();
+  let agent = normalizeHistoryAgent(input.agent);
+  if (agent === "case-generator" && isAgentAnalysisResponse(input.result)) agent = input.result.agent;
   const createdAt = input.createdAt || input.result.stats?.startedAt || input.result.stats?.completedAt || new Date().toISOString();
   const completedAt = input.completedAt || input.result.stats?.completedAt;
-  const usage = input.result.stats?.usage;
-  const moduleCount = input.result.stats?.moduleCount ?? getModuleCount(input.result);
+  const usage = isGenerateResponse(input.result) ? input.result.stats?.usage : undefined;
+  const moduleCount = isGenerateResponse(input.result) ? input.result.stats?.moduleCount ?? getModuleCount(input.result) : getModuleCount(input.result);
+  const caseCount = getPayloadItemCount(input.result);
+  const fileName = getPayloadFileName(agent, input.result, input.fileName);
 
   db.prepare(`
     INSERT OR REPLACE INTO run_history (
       id,
+      agent,
       status,
       created_at,
       completed_at,
@@ -206,17 +286,18 @@ export function saveRunHistoryRecord(input: {
       last_event_json,
       result_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
+    agent,
     input.status ?? "success",
     createdAt,
     completedAt ?? null,
-    input.result.fileName,
+    fileName,
     input.provider,
     input.model,
     input.thinkingMode ?? input.result.stats?.thinkingMode ?? null,
-    input.result.cases.length,
+    caseCount,
     moduleCount,
     input.result.stats?.durationMs ?? null,
     usage?.promptTokens ?? null,
@@ -231,16 +312,17 @@ export function saveRunHistoryRecord(input: {
     JSON.stringify(input.result),
   );
 
-  return {
+  const common = {
     id,
+    agent,
     status: input.status ?? "success",
     createdAt,
     ...(completedAt ? { completedAt } : {}),
-    fileName: input.result.fileName,
+    fileName,
     provider: input.provider,
     model: input.model,
     thinkingMode: input.thinkingMode ?? input.result.stats?.thinkingMode,
-    caseCount: input.result.cases.length,
+    caseCount,
     moduleCount,
     durationMs: input.result.stats?.durationMs,
     usage,
@@ -249,8 +331,25 @@ export function saveRunHistoryRecord(input: {
     ...(input.errorDetail ? { errorDetail: input.errorDetail } : {}),
     ...(input.errorRaw ? { errorRaw: input.errorRaw } : {}),
     ...(input.lastEvent ? { lastEvent: input.lastEvent } : {}),
-    result: input.result,
-  } satisfies StoredRunHistoryRecord;
+  };
+
+  if (agent === "case-generator" && isGenerateResponse(input.result)) {
+    return {
+      ...common,
+      agent,
+      result: input.result,
+    } satisfies StoredCaseRunHistoryRecord;
+  }
+
+  if (isAgentAnalysisResponse(input.result) && agent !== "case-generator") {
+    return {
+      ...common,
+      agent,
+      analysisResult: input.result,
+    } satisfies StoredAnalysisRunHistoryRecord;
+  }
+
+  throw new Error("运行记录结果类型与智能体不匹配。");
 }
 
 export function updateRunHistoryCaseStatuses(
@@ -268,7 +367,9 @@ export function updateRunHistoryCaseStatuses(
   const row = db.prepare("SELECT * FROM run_history WHERE id = ?").get(id) as RunHistoryRow | undefined;
   if (!row) return null;
 
-  const result = JSON.parse(row.result_json) as GenerateResponse;
+  const result = JSON.parse(row.result_json) as GenerateResponse | AgentAnalysisResponse;
+  if (normalizeHistoryAgent(row.agent) !== "case-generator" || !isGenerateResponse(result)) return rowToRecord(row);
+
   let updatedCount = 0;
 
   for (const update of updates) {
@@ -292,6 +393,11 @@ export function updateRunHistoryCaseStatuses(
 export function deleteRunHistoryRecord(id: string) {
   const db = getDatabase();
   db.prepare("DELETE FROM run_history WHERE id = ?").run(id);
+}
+
+export function deleteRunHistoryRecordsByAgent(agent: TestAgentType) {
+  const db = getDatabase();
+  db.prepare("DELETE FROM run_history WHERE agent = ?").run(agent);
 }
 
 export function clearRunHistoryRecords() {
