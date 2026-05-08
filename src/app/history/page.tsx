@@ -1,10 +1,12 @@
 "use client";
 
-import { memo, startTransition, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
   ArrowLeft,
+  ChevronLeft,
+  ChevronRight,
   CheckCircle2,
   CheckCheck,
   CircleAlert,
@@ -105,6 +107,7 @@ const historyUiStorageKeys = {
 const historyUiChangeEvent = "testmind.history-ui-change";
 
 const priorityOptions: TestPriority[] = ["P0", "P1", "P2"];
+const pageSizeOptions = [20, 50, 100];
 const moduleGroupPrefix = "__module_group__:";
 
 const moduleHeaderStyles = [
@@ -162,7 +165,11 @@ function useStoredBoolean(key: string, fallback: boolean) {
 
 function groupCases(cases: TestCase[]) {
   const data = new Map<string, TestCase[]>();
-  for (const item of cases) data.set(item.module, [...(data.get(item.module) ?? []), item]);
+  for (const item of cases) {
+    const group = data.get(item.module);
+    if (group) group.push(item);
+    else data.set(item.module, [item]);
+  }
   return [...data.entries()].map(([moduleName, items]) => ({ moduleName, cases: items }));
 }
 
@@ -225,6 +232,74 @@ function createExportResult(record: CaseRunHistoryRecord, cases: TestCase[], suf
 
 type EditableCasePatch = Pick<TestCase, "category" | "expectedResult" | "expectedResults" | "evidence" | "module" | "preconditions" | "priority" | "steps" | "testPoint" | "title">;
 
+function PaginationControls({
+  end,
+  page,
+  pageSize,
+  start,
+  total,
+  totalPages,
+  onPageChange,
+  onPageSizeChange,
+}: {
+  end: number;
+  page: number;
+  pageSize: number;
+  start: number;
+  total: number;
+  totalPages: number;
+  onPageChange: (page: number) => void;
+  onPageSizeChange: (pageSize: number) => void;
+}) {
+  if (!total) return null;
+
+  return (
+    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm lg:flex-row lg:items-center lg:justify-between">
+      <div className="text-slate-500">
+        当前显示 <span className="font-semibold text-slate-800">{start}-{end}</span> / {total} 条
+      </div>
+      <div className="flex flex-wrap items-center gap-2">
+        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+          {pageSizeOptions.map((option) => (
+            <button
+              key={option}
+              className={clsx(
+                "h-8 rounded-md px-2.5 text-xs font-medium transition",
+                pageSize === option ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white hover:text-slate-950",
+              )}
+              type="button"
+              onClick={() => onPageSizeChange(option)}
+            >
+              {option}/页
+            </button>
+          ))}
+        </div>
+        <button
+          aria-label="上一页"
+          className="grid size-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+          disabled={page <= 1}
+          type="button"
+          onClick={() => onPageChange(page - 1)}
+        >
+          <ChevronLeft className="size-4" />
+        </button>
+        <span className="min-w-16 text-center text-sm font-medium text-slate-700">
+          {page} / {totalPages}
+        </span>
+        <button
+          aria-label="下一页"
+          className="grid size-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+          disabled={page >= totalPages}
+          type="button"
+          onClick={() => onPageChange(page + 1)}
+        >
+          <ChevronRight className="size-4" />
+        </button>
+      </div>
+    </div>
+  );
+}
+
 function CoverageReviewPanel({
   issues,
   onOpen,
@@ -280,7 +355,10 @@ export default function HistoryPage() {
   const [updatingPinnedId, setUpdatingPinnedId] = useState("");
   const [recordMenu, setRecordMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [bulkUpdatingStatus, setBulkUpdatingStatus] = useState<CaseReviewStatus | "">("");
+  const [pageSize, setPageSize] = useState(20);
+  const [currentPage, setCurrentPage] = useState(1);
   const [error, setError] = useState("");
+  const pendingScrollTargetRef = useRef<string | null>(null);
   const selectedRecord = history.find((record) => record.id === activeId) ?? history[0] ?? null;
   const menuRecord = recordMenu ? history.find((record) => record.id === recordMenu.id) ?? null : null;
   const allCases = useMemo(() => selectedRecord?.result.cases ?? [], [selectedRecord]);
@@ -368,12 +446,45 @@ export default function HistoryPage() {
     [activeReviewStatus, moduleFilteredCases],
   );
   const coverageIssues = useMemo(() => buildCoverageReview(selectedRecord?.result), [selectedRecord]);
-  const groupedCases = useMemo(() => groupCases(visibleCases), [visibleCases]);
   const categoryCounts = useMemo(() => {
     const data = Object.fromEntries(categories.map((category) => [category, 0])) as Record<TestCategory, number>;
     for (const item of visibleCases) data[item.category] += 1;
     return data;
   }, [visibleCases]);
+  const totalPages = Math.max(1, Math.ceil(visibleCases.length / pageSize));
+  const safePage = Math.min(currentPage, totalPages);
+  const pageStart = visibleCases.length ? (safePage - 1) * pageSize + 1 : 0;
+  const pageEnd = Math.min(safePage * pageSize, visibleCases.length);
+  const paginatedCases = useMemo(() => visibleCases.slice((safePage - 1) * pageSize, safePage * pageSize), [pageSize, safePage, visibleCases]);
+  const groupedPageCases = useMemo(() => groupCases(paginatedCases), [paginatedCases]);
+
+  function requestResultScroll(target: string) {
+    pendingScrollTargetRef.current = target;
+  }
+
+  function changePage(page: number) {
+    requestResultScroll("全部");
+    setCurrentPage(page);
+  }
+
+  function changePageSize(nextPageSize: number) {
+    requestResultScroll("全部");
+    setPageSize(nextPageSize);
+    setCurrentPage(1);
+  }
+
+  useEffect(() => {
+    const target = pendingScrollTargetRef.current;
+    if (!target) return;
+
+    pendingScrollTargetRef.current = null;
+    window.requestAnimationFrame(() => {
+      const groupName = getModuleGroupName(target);
+      const targetElement =
+        target === "全部" || groupName ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(target));
+      targetElement?.scrollIntoView({ behavior: "auto", block: "start" });
+    });
+  }, [groupedPageCases]);
 
   async function exportCases(cases: TestCase[], suffix: string) {
     if (!selectedRecord || isExportingExcel) return;
@@ -481,30 +592,29 @@ export default function HistoryPage() {
 
   function selectRecord(id: string) {
     if (activeId === id) return;
+    requestResultScroll("全部");
     startTransition(() => {
       setActiveId(id);
       setActiveModule("全部");
       setActiveReviewStatus("全部");
+      setCurrentPage(1);
     });
   }
 
   function selectModule(moduleName: string) {
+    requestResultScroll(moduleName);
     startTransition(() => {
       setActiveReviewStatus("全部");
       setActiveModule(moduleName);
+      setCurrentPage(1);
     });
-    window.setTimeout(() => {
-      const groupName = getModuleGroupName(moduleName);
-      const firstGroupModule = groupName ? moduleGroupMap.get(groupName)?.[0] : "";
-      const targetModuleName = firstGroupModule || moduleName;
-      const targetElement = moduleName === "全部" ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(targetModuleName));
-      targetElement?.scrollIntoView({ behavior: "auto", block: "start" });
-    }, 80);
   }
 
   function selectReviewStatus(status: CaseReviewStatus | "全部") {
+    requestResultScroll("全部");
     startTransition(() => {
       setActiveReviewStatus(status);
+      setCurrentPage(1);
     });
   }
 
@@ -951,11 +1061,22 @@ export default function HistoryPage() {
                 </div>
               ) : null}
 
-              {groupedCases.length ? (
+              <PaginationControls
+                end={pageEnd}
+                page={safePage}
+                pageSize={pageSize}
+                start={pageStart}
+                total={visibleCases.length}
+                totalPages={totalPages}
+                onPageChange={changePage}
+                onPageSizeChange={changePageSize}
+              />
+
+              {groupedPageCases.length ? (
                 <div className="grid gap-5">
-                  {groupedCases.map((group, groupIndex) => {
+                  {groupedPageCases.map((group, groupIndex) => {
                     const moduleTotal = moduleCounts[group.moduleName] ?? group.cases.length;
-                    const moduleCaseText = `${moduleTotal} 条测试用例`;
+                    const moduleCaseText = `本页 ${group.cases.length} 条 / 模块 ${moduleTotal} 条`;
                     const moduleStyleIndex = moduleNames.indexOf(group.moduleName);
                     const moduleHeaderStyle = moduleHeaderStyles[(moduleStyleIndex >= 0 ? moduleStyleIndex : groupIndex) % moduleHeaderStyles.length];
                     return (
@@ -1004,6 +1125,17 @@ export default function HistoryPage() {
                   <p className="mt-2 text-sm leading-6 text-slate-500">可以查看上方运行日志详情，定位失败阶段、模型返回和最后一次事件。</p>
                 </div>
               )}
+
+              <PaginationControls
+                end={pageEnd}
+                page={safePage}
+                pageSize={pageSize}
+                start={pageStart}
+                total={visibleCases.length}
+                totalPages={totalPages}
+                onPageChange={changePage}
+                onPageSizeChange={changePageSize}
+              />
 
             </>
           ) : (

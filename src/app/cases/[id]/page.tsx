@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -89,7 +89,11 @@ function getCaseSearchText(item: TestCase) {
 
 function groupCases(cases: TestCase[]) {
   const data = new Map<string, TestCase[]>();
-  for (const item of cases) data.set(item.module, [...(data.get(item.module) ?? []), item]);
+  for (const item of cases) {
+    const group = data.get(item.module);
+    if (group) group.push(item);
+    else data.set(item.module, [item]);
+  }
   return [...data.entries()].map(([moduleName, items]) => ({ moduleName, cases: items }));
 }
 
@@ -258,13 +262,20 @@ export default function CaseDetailPage() {
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
   const [isExporting, setIsExporting] = useState(false);
+  const contentRef = useRef<HTMLElement | null>(null);
+  const pendingScrollTopRef = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setCurrentReport(readCurrentReport()), 0);
     return () => window.clearTimeout(timer);
   }, []);
 
+  function requestContentTop() {
+    pendingScrollTopRef.current = true;
+  }
+
   function resetPage() {
+    requestContentTop();
     setCurrentPage(1);
   }
 
@@ -286,6 +297,11 @@ export default function CaseDetailPage() {
   function changePageSize(nextPageSize: number) {
     setPageSize(nextPageSize);
     resetPage();
+  }
+
+  function changePage(page: number) {
+    requestContentTop();
+    setCurrentPage(page);
   }
 
   const record = history.find((item): item is CaseRunHistoryRecord => item.id === id && isCaseRunHistoryRecord(item)) ?? null;
@@ -327,6 +343,13 @@ export default function CaseDetailPage() {
   const pageEnd = Math.min(safePage * pageSize, filteredCases.length);
   const paginatedCases = useMemo(() => filteredCases.slice((safePage - 1) * pageSize, safePage * pageSize), [filteredCases, pageSize, safePage]);
   const groupedCases = useMemo(() => groupCases(paginatedCases), [paginatedCases]);
+
+  useEffect(() => {
+    if (!pendingScrollTopRef.current) return;
+
+    pendingScrollTopRef.current = false;
+    contentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [activeCategory, activeModule, pageSize, query, safePage]);
 
   async function exportExcel() {
     if (!result || isExporting) return;
@@ -450,7 +473,7 @@ export default function CaseDetailPage() {
           </div>
         </aside>
 
-          <section className="min-h-0 min-w-0 space-y-3 overflow-y-auto pr-1">
+          <section ref={contentRef} className="min-h-0 min-w-0 space-y-3 overflow-y-auto pr-1">
           {result ? (
             <>
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -524,7 +547,7 @@ export default function CaseDetailPage() {
                 start={pageStart}
                 total={filteredCases.length}
                 totalPages={totalPages}
-                onPageChange={setCurrentPage}
+                onPageChange={changePage}
                 onPageSizeChange={changePageSize}
               />
 
@@ -573,7 +596,7 @@ export default function CaseDetailPage() {
                 start={pageStart}
                 total={filteredCases.length}
                 totalPages={totalPages}
-                onPageChange={setCurrentPage}
+                onPageChange={changePage}
                 onPageSizeChange={changePageSize}
               />
             </>

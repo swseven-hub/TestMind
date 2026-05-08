@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
 import {
@@ -155,6 +155,8 @@ export default function AnalysisDetailPage() {
   const [query, setQuery] = useState("");
   const [pageSize, setPageSize] = useState(20);
   const [currentPage, setCurrentPage] = useState(1);
+  const contentRef = useRef<HTMLElement | null>(null);
+  const pendingScrollTopRef = useRef(false);
 
   useEffect(() => {
     const timer = window.setTimeout(() => setCurrentResult(readCurrentAnalysis()), 0);
@@ -166,7 +168,12 @@ export default function AnalysisDetailPage() {
   const itemCount = useMemo(() => (result ? result.sections.reduce((sum, section) => sum + section.items.length, 0) : 0), [result]);
   const p0Count = useMemo(() => (result ? result.sections.reduce((sum, section) => sum + section.items.filter((item) => item.priority === "P0").length, 0) : 0), [result]);
 
+  function requestContentTop() {
+    pendingScrollTopRef.current = true;
+  }
+
   function resetPage() {
+    requestContentTop();
     setCurrentPage(1);
   }
 
@@ -190,6 +197,11 @@ export default function AnalysisDetailPage() {
     resetPage();
   }
 
+  function changePage(page: number) {
+    requestContentTop();
+    setCurrentPage(page);
+  }
+
   const filteredItems = useMemo(() => {
     const normalized = query.trim().toLowerCase();
     return flattenItems(result?.sections ?? []).filter(({ section, item }) => {
@@ -205,6 +217,13 @@ export default function AnalysisDetailPage() {
   const pageStart = filteredItems.length ? (safePage - 1) * pageSize + 1 : 0;
   const pageEnd = Math.min(safePage * pageSize, filteredItems.length);
   const paginatedItems = useMemo(() => filteredItems.slice((safePage - 1) * pageSize, safePage * pageSize), [filteredItems, pageSize, safePage]);
+
+  useEffect(() => {
+    if (!pendingScrollTopRef.current) return;
+
+    pendingScrollTopRef.current = false;
+    contentRef.current?.scrollTo({ top: 0, behavior: "auto" });
+  }, [activePriority, activeSection, pageSize, query, safePage]);
 
   return (
     <main className="h-screen overflow-hidden bg-[#f6f8fb] text-slate-950">
@@ -290,7 +309,7 @@ export default function AnalysisDetailPage() {
           </div>
         </aside>
 
-          <section className="min-h-0 min-w-0 space-y-3 overflow-y-auto pr-1">
+          <section ref={contentRef} className="min-h-0 min-w-0 space-y-3 overflow-y-auto pr-1">
           {result ? (
             <>
               <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
@@ -374,7 +393,7 @@ export default function AnalysisDetailPage() {
                 start={pageStart}
                 total={filteredItems.length}
                 totalPages={totalPages}
-                onPageChange={setCurrentPage}
+                onPageChange={changePage}
                 onPageSizeChange={changePageSize}
               />
 
