@@ -1060,6 +1060,29 @@ function AgentRunHistoryPanel({ activeAgent, records }: { activeAgent: TestAgent
   );
 }
 
+function CaseRunHistoryButton({ count }: { count: number }) {
+  return (
+    <Link
+      className="flex h-full min-h-32 min-w-0 flex-col justify-between rounded-lg border border-slate-200 bg-white p-4 text-left shadow-sm transition hover:border-teal-200 hover:bg-teal-50"
+      href="/history"
+      title={count ? `查看 ${count} 次用例生成记录` : "查看用例运行记录"}
+    >
+      <span className="min-w-0">
+        <span className="flex items-center gap-2 text-sm font-medium text-teal-700">
+          <History className="size-4" />
+          运行记录
+        </span>
+        <span className="mt-2 block text-base font-semibold text-slate-900">用例生成智能体</span>
+      </span>
+      <span className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-slate-950 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-slate-800">
+        <History className="size-4" />
+        运行记录
+        {count ? <span className="rounded-full bg-white/10 px-2 py-0.5 text-xs text-white">{count}</span> : null}
+      </span>
+    </Link>
+  );
+}
+
 function priorityBadgeClass(priority?: string) {
   if (priority === "P0") return "bg-rose-50 text-rose-700 ring-rose-200";
   if (priority === "P1") return "bg-amber-50 text-amber-700 ring-amber-200";
@@ -2009,8 +2032,10 @@ export default function Home() {
             />
           ) : (
             <>
-              {renderExecutionPanel()}
-              <AgentRunHistoryPanel activeAgent={activeAgent} records={currentAgentHistory} />
+              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_280px] xl:items-stretch">
+                {renderExecutionPanel()}
+                <CaseRunHistoryButton count={currentAgentHistory.length} />
+              </div>
               {result ? (
                 <>
                   <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
