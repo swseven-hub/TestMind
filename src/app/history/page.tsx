@@ -713,8 +713,8 @@ export default function HistoryPage() {
               </div>
             </div>
           ) : (
-            <div className="sticky top-5 space-y-3">
-              <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+            <div className="sticky top-5 flex max-h-[calc(100vh-2.5rem)] min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm">
+              <div className="shrink-0 border-b border-slate-200 p-4">
                 <div className="flex items-center justify-between gap-3">
                   <div>
                     <h2 className="font-semibold">用例运行记录</h2>
@@ -731,65 +731,67 @@ export default function HistoryPage() {
                   </button>
                 </div>
               </div>
-              {history.length ? (
-                history.map((record) => {
-                  const active = selectedRecord?.id === record.id;
-                  return (
-                    <div
-                      key={record.id}
-                      className={clsx(
-                        "rounded-lg border transition",
-                        active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-200 bg-white text-slate-700 shadow-sm hover:border-slate-300",
-                      )}
-                    >
-                      <div className="flex items-stretch gap-1 p-3">
-                        <button className="min-w-0 flex-1 text-left" type="button" onClick={() => selectRecord(record.id)}>
-                          <div className="flex items-start justify-between gap-3">
-                            <div className="min-w-0">
-                              <p className="truncate text-sm font-semibold">{record.fileName}</p>
-                              <p className={clsx("mt-1 text-xs", active ? "text-slate-300" : "text-slate-500")}>
-                                {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {record.caseCount} 条
-                              </p>
+              <div className="scrollbar-hidden min-h-0 flex-1 space-y-2 overflow-y-auto p-3">
+                {history.length ? (
+                  history.map((record) => {
+                    const active = selectedRecord?.id === record.id;
+                    return (
+                      <div
+                        key={record.id}
+                        className={clsx(
+                          "rounded-lg border transition",
+                          active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-100 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
+                        )}
+                      >
+                        <div className="flex items-stretch gap-1 p-3">
+                          <button className="min-w-0 flex-1 text-left" type="button" onClick={() => selectRecord(record.id)}>
+                            <div className="flex items-start justify-between gap-3">
+                              <div className="min-w-0">
+                                <p className="truncate text-sm font-semibold">{record.fileName}</p>
+                                <p className={clsx("mt-1 text-xs", active ? "text-slate-300" : "text-slate-500")}>
+                                  {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {record.caseCount} 条
+                                </p>
+                              </div>
+                              <span
+                                className={clsx(
+                                  "shrink-0 rounded-full px-2 py-1 text-xs ring-1",
+                                  active ? "bg-white/10 text-white ring-white/20" : statusStyles[record.status],
+                                )}
+                              >
+                                {statusLabels[record.status]}
+                              </span>
                             </div>
-                            <span
-                              className={clsx(
-                                "shrink-0 rounded-full px-2 py-1 text-xs ring-1",
-                                active ? "bg-white/10 text-white ring-white/20" : statusStyles[record.status],
-                              )}
-                            >
-                              {statusLabels[record.status]}
-                            </span>
-                          </div>
-                          <p className={clsx("mt-2 truncate text-xs", active ? "text-slate-300" : "text-slate-400")}>
-                            {record.model}
-                            {record.thinkingMode ? ` · ${thinkingModeLabels[record.thinkingMode]}` : ""} · {formatDuration(record.durationMs)}
-                            {record.result.stats?.reasoningEffort ? ` · 推理${reasoningEffortLabels[record.result.stats.reasoningEffort]}` : ""}
-                          </p>
-                        </button>
-                        <button
-                          aria-label="删除运行记录"
-                          className={clsx(
-                            "grid size-8 shrink-0 place-items-center rounded-md opacity-70 transition hover:opacity-100",
-                            active ? "hover:bg-white/10" : "hover:bg-slate-100",
-                          )}
-                          type="button"
-                          onClick={() => deleteRecord(record.id)}
-                        >
-                          <Trash2 className="size-3.5" />
-                        </button>
+                            <p className={clsx("mt-2 truncate text-xs", active ? "text-slate-300" : "text-slate-400")}>
+                              {record.model}
+                              {record.thinkingMode ? ` · ${thinkingModeLabels[record.thinkingMode]}` : ""} · {formatDuration(record.durationMs)}
+                              {record.result.stats?.reasoningEffort ? ` · 推理${reasoningEffortLabels[record.result.stats.reasoningEffort]}` : ""}
+                            </p>
+                          </button>
+                          <button
+                            aria-label="删除运行记录"
+                            className={clsx(
+                              "grid size-8 shrink-0 place-items-center rounded-md opacity-70 transition hover:opacity-100",
+                              active ? "hover:bg-white/10" : "hover:bg-slate-100",
+                            )}
+                            type="button"
+                            onClick={() => deleteRecord(record.id)}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
                       </div>
+                    );
+                  })
+                ) : (
+                  <div className="p-3 text-center">
+                    <div className="mx-auto grid size-12 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200">
+                      <History className="size-6" />
                     </div>
-                  );
-                })
-              ) : (
-                <div className="rounded-lg border border-slate-200 bg-white p-6 text-center shadow-sm">
-                  <div className="mx-auto grid size-12 place-items-center rounded-lg bg-slate-50 text-slate-500 ring-1 ring-slate-200">
-                    <History className="size-6" />
+                    <p className="mt-4 font-medium text-slate-700">暂无运行记录</p>
+                    <p className="mt-2 text-sm leading-6 text-slate-500">生成成功后会保存在这里，刷新页面后也能继续查看。</p>
                   </div>
-                  <p className="mt-4 font-medium text-slate-700">暂无运行记录</p>
-                  <p className="mt-2 text-sm leading-6 text-slate-500">生成成功后会保存在这里，刷新页面后也能继续查看。</p>
-                </div>
-              )}
+                )}
+              </div>
             </div>
           )}
         </aside>
@@ -1037,7 +1039,12 @@ export default function HistoryPage() {
         </section>
 
         <aside className="min-w-0">
-          <div className="scrollbar-hidden sticky top-5 max-h-[calc(100vh-2.5rem)] space-y-3 overflow-y-auto">
+          <div
+            className={clsx(
+              "sticky top-5",
+              rightRailCollapsed ? "" : "flex max-h-[calc(100vh-2.5rem)] min-h-0 flex-col overflow-hidden rounded-lg border border-slate-200 bg-white shadow-sm",
+            )}
+          >
             {rightRailCollapsed ? (
               <div className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
                 <div className="flex items-center justify-center gap-2 lg:flex-col">
@@ -1068,7 +1075,7 @@ export default function HistoryPage() {
               </div>
             ) : (
               <>
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="shrink-0 border-b border-slate-200 p-4">
                   <div className="flex items-center justify-between gap-3">
                     <div>
                       <h2 className="font-semibold">目录</h2>
@@ -1086,7 +1093,8 @@ export default function HistoryPage() {
                   </div>
                 </div>
 
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                <div className="scrollbar-hidden min-h-0 flex-1 space-y-4 overflow-y-auto p-4">
+                  <section className="rounded-lg bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold">模块</h3>
@@ -1104,7 +1112,7 @@ export default function HistoryPage() {
                       </button>
                     ) : null}
                   </div>
-                  <div className="scrollbar-hidden mt-3 grid max-h-[42vh] gap-1.5 overflow-y-auto">
+                  <div className="mt-3 grid gap-1.5">
                     <button
                       aria-pressed={currentModule === "全部"}
                       className={clsx(
@@ -1173,9 +1181,9 @@ export default function HistoryPage() {
                       );
                     })}
                   </div>
-                </div>
+                  </section>
 
-                <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <section className="rounded-lg bg-slate-50 p-3">
                   <div className="flex items-start justify-between gap-3">
                     <div>
                       <h3 className="font-semibold">状态</h3>
@@ -1245,6 +1253,7 @@ export default function HistoryPage() {
                       当前筛选设为需修改
                     </button>
                   </div>
+                  </section>
                 </div>
               </>
             )}
