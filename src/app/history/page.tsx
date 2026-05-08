@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState, useSyncExternalStore } from "react";
+import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -382,11 +382,24 @@ export default function HistoryPage() {
   const allCases = useMemo(() => selectedRecord?.result.cases ?? [], [selectedRecord]);
   const workspaceGridClass = leftRailCollapsed
     ? rightRailCollapsed
-      ? "lg:grid-cols-[72px_minmax(0,1fr)_72px]"
-      : "lg:grid-cols-[72px_minmax(0,1fr)_280px]"
+      ? "grid-cols-[72px_minmax(0,1fr)_72px]"
+      : "grid-cols-[72px_minmax(0,1fr)_240px] xl:grid-cols-[72px_minmax(0,1fr)_280px]"
     : rightRailCollapsed
-      ? "lg:grid-cols-[360px_minmax(0,1fr)_72px]"
-      : "lg:grid-cols-[360px_minmax(0,1fr)_280px]";
+      ? "grid-cols-[300px_minmax(0,1fr)_72px] xl:grid-cols-[360px_minmax(0,1fr)_72px]"
+      : "grid-cols-[300px_minmax(0,1fr)_240px] xl:grid-cols-[360px_minmax(0,1fr)_280px]";
+
+  useEffect(() => {
+    if (typeof window === "undefined") return;
+    const collapseAt = 1440;
+    const collapseWhenNarrow = () => {
+      if (window.innerWidth >= collapseAt) return;
+      if (!leftRailCollapsed) setLeftRailCollapsed(true);
+      if (!rightRailCollapsed) setRightRailCollapsed(true);
+    };
+    collapseWhenNarrow();
+    window.addEventListener("resize", collapseWhenNarrow);
+    return () => window.removeEventListener("resize", collapseWhenNarrow);
+  }, [leftRailCollapsed, rightRailCollapsed, setLeftRailCollapsed, setRightRailCollapsed]);
 
   const moduleCounts = useMemo(() => {
     const data: Record<string, number> = {};
@@ -1229,136 +1242,48 @@ function HistoryCaseCard({
   }
 
   return (
-    <article className={clsx("rounded-lg border bg-white p-5 shadow-sm transition", editing ? "border-teal-200 ring-1 ring-teal-100" : "border-slate-200")}>
-      <div className={clsx("grid gap-4", editing ? "lg:grid-cols-[minmax(0,1fr)_420px] lg:items-start" : "sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start")}>
-        <div className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
-            <span className={clsx("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ring-1", categoryStyles[item.category])}>
-              <Icon className="size-3.5" />
-              {item.category}
-            </span>
-            <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">重要程度 {template.priority}</span>
-            <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
-            <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", reviewStatusStyles[reviewStatus])}>{reviewStatus}</span>
-            <span className="text-xs text-slate-400">{template.id}</span>
-          </div>
-          {editing ? (
-            <div className="mt-3 grid gap-3 rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
-              <input
-                className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 outline-none transition focus:border-teal-500"
-                value={draft.title}
-                onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))}
-              />
-              <input
-                className="min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
-                value={draft.module}
-                onChange={(event) => setDraft((value) => ({ ...value, module: event.target.value }))}
-              />
-              <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_220px]">
-                <div className="min-w-0 rounded-lg bg-white p-2 ring-1 ring-slate-200">
-                  <p className="px-1 pb-2 text-xs font-medium text-slate-400">类型</p>
-                  <div className="grid grid-cols-3 gap-1 sm:grid-cols-5">
-                    {categories.map((category) => (
-                      <button
-                        key={category}
-                        className={clsx(
-                          "h-9 rounded-md px-2 text-sm font-medium transition",
-                          draft.category === category ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
-                        )}
-                        type="button"
-                        onClick={() => setDraft((value) => ({ ...value, category }))}
-                      >
-                        {category}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-                <div className="min-w-0 rounded-lg bg-white p-2 ring-1 ring-slate-200">
-                  <p className="px-1 pb-2 text-xs font-medium text-slate-400">优先级</p>
-                  <div className="grid grid-cols-3 gap-1">
-                    {priorityOptions.map((priority) => (
-                      <button
-                        key={priority}
-                        className={clsx(
-                          "h-9 rounded-md px-2 text-sm font-medium transition",
-                          draft.priority === priority ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
-                        )}
-                        type="button"
-                        onClick={() => setDraft((value) => ({ ...value, priority }))}
-                      >
-                        {priority}
-                      </button>
-                    ))}
-                  </div>
-                </div>
-              </div>
-              <input
-                className="min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
-                placeholder="测试点"
-                value={draft.testPoint}
-                onChange={(event) => setDraft((value) => ({ ...value, testPoint: event.target.value }))}
-              />
-              <textarea
-                className="min-h-20 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
-                placeholder="依据"
-                value={draft.evidence}
-                onChange={(event) => setDraft((value) => ({ ...value, evidence: event.target.value }))}
-              />
+    <>
+      <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+        <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
+          <div className="min-w-0">
+            <div className="flex flex-wrap items-center gap-2">
+              <span className={clsx("inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-xs font-medium ring-1", categoryStyles[item.category])}>
+                <Icon className="size-3.5" />
+                {item.category}
+              </span>
+              <span className="rounded-full bg-slate-100 px-2.5 py-1 text-xs font-medium text-slate-700">重要程度 {template.priority}</span>
+              <span className="rounded-full bg-white px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">{template.caseType}</span>
+              <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", reviewStatusStyles[reviewStatus])}>{reviewStatus}</span>
+              <span className="text-xs text-slate-400">{template.id}</span>
             </div>
-          ) : (
-            <>
-              <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
-              <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
-            </>
-          )}
-          {!editing && (item.testPoint || item.evidence) ? (
-            <p className="mt-2 break-words text-sm leading-6 text-slate-500">
-              {item.testPoint ? `测试点：${item.testPoint}` : ""}
-              {item.testPoint && item.evidence ? " ｜ " : ""}
-              {item.evidence ? `依据：${item.evidence}` : ""}
-            </p>
-          ) : null}
-        </div>
-        <div className={clsx("flex min-w-0 flex-col gap-2", editing ? "rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200" : "shrink-0")}>
-          <div className={clsx("grid gap-1 rounded-lg border border-slate-200 bg-white p-1", editing ? "grid-cols-2 sm:grid-cols-4" : "grid-cols-2 lg:flex lg:flex-wrap")}>
-            {caseReviewStatuses.map((status) => (
-              <button
-                key={status}
-                className={clsx(
-                  "min-h-9 rounded-md px-2 text-sm font-medium transition disabled:cursor-wait",
-                  reviewStatus === status ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-white hover:text-slate-950",
-                )}
-                disabled={updating}
-                type="button"
-                onClick={() => onStatusChange(item, status)}
-              >
-                {status}
-              </button>
-            ))}
-            {updating ? <Loader2 className="mx-1 size-4 self-center justify-self-center animate-spin text-teal-600" /> : null}
+            <h3 className="mt-3 text-lg font-semibold leading-snug">{item.title}</h3>
+            <p className="mt-1 break-words text-sm text-slate-500">{template.module}</p>
+            {item.testPoint || item.evidence ? (
+              <p className="mt-2 break-words text-sm leading-6 text-slate-500">
+                {item.testPoint ? `测试点：${item.testPoint}` : ""}
+                {item.testPoint && item.evidence ? " ｜ " : ""}
+                {item.evidence ? `依据：${item.evidence}` : ""}
+              </p>
+            ) : null}
           </div>
-          {editing ? (
-            <div className="grid grid-cols-[minmax(0,1fr)_48px] gap-2">
-              <button
-                className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
-                disabled={saving}
-                type="button"
-                onClick={saveDraft}
-              >
-                {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
-                保存
-              </button>
-              <button
-                className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
-                disabled={saving}
-                title="取消编辑"
-                type="button"
-                onClick={() => setEditing(false)}
-              >
-                <X className="size-4" />
-              </button>
+          <div className="flex min-w-0 shrink-0 flex-col gap-2">
+            <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-white p-1 lg:flex lg:flex-wrap">
+              {caseReviewStatuses.map((status) => (
+                <button
+                  key={status}
+                  className={clsx(
+                    "min-h-9 rounded-md px-2 text-sm font-medium transition disabled:cursor-wait",
+                    reviewStatus === status ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                  )}
+                  disabled={updating}
+                  type="button"
+                  onClick={() => onStatusChange(item, status)}
+                >
+                  {status}
+                </button>
+              ))}
+              {updating ? <Loader2 className="mx-1 size-4 self-center justify-self-center animate-spin text-teal-600" /> : null}
             </div>
-          ) : (
             <button
               className="inline-flex min-h-9 items-center justify-center gap-1.5 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50"
               type="button"
@@ -1367,32 +1292,16 @@ function HistoryCaseCard({
               <Pencil className="size-4" />
               编辑
             </button>
-          )}
+          </div>
         </div>
-      </div>
 
-      <div className={clsx("mt-4 grid gap-4", editing ? "lg:grid-cols-3" : "xl:grid-cols-[1fr_1.2fr_1fr]")}>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
-          {editing ? (
-            <textarea
-              className="mt-2 min-h-32 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
-              value={draft.preconditions}
-              onChange={(event) => setDraft((value) => ({ ...value, preconditions: event.target.value }))}
-            />
-          ) : (
+        <div className="mt-4 grid gap-4 xl:grid-cols-[1fr_1.2fr_1fr]">
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-medium uppercase text-slate-400">前置条件</p>
             <p className="mt-2 break-words text-sm leading-6 text-slate-700">{template.preconditions || "无"}</p>
-          )}
-        </div>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
-          {editing ? (
-            <textarea
-              className="mt-2 min-h-40 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
-              value={draft.stepsText}
-              onChange={(event) => setDraft((value) => ({ ...value, stepsText: event.target.value }))}
-            />
-          ) : (
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-medium uppercase text-slate-400">步骤描述</p>
             <ol className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
               {item.steps.map((step, index) => (
                 <li key={`${item.id}-history-step-${index}`} className="grid grid-cols-[24px_1fr] gap-2">
@@ -1401,25 +1310,186 @@ function HistoryCaseCard({
                 </li>
               ))}
             </ol>
-          )}
-        </div>
-        <div className="rounded-lg bg-slate-50 p-3">
-          <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
-          {editing ? (
-            <textarea
-              className="mt-2 min-h-40 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
-              value={draft.expectedResultsText}
-              onChange={(event) => setDraft((value) => ({ ...value, expectedResultsText: event.target.value }))}
-            />
-          ) : (
+          </div>
+          <div className="rounded-lg bg-slate-50 p-3">
+            <p className="text-xs font-medium uppercase text-slate-400">预期结果</p>
             <div className="mt-2 space-y-2 text-sm leading-6 text-slate-700">
               {template.expectedResults.split("\n").map((line, index) => (
                 <p key={`${item.id}-history-expected-${index}`} className="break-words">{line}</p>
               ))}
             </div>
-          )}
+          </div>
         </div>
-      </div>
-    </article>
+      </article>
+
+      {editing ? (
+        <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+          <section className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl min-w-0 flex-col overflow-hidden rounded-lg bg-white shadow-2xl ring-1 ring-slate-900/10">
+            <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+              <div className="min-w-0">
+                <div className="flex flex-wrap items-center gap-2 text-xs">
+                  <span className="rounded-full bg-slate-100 px-2.5 py-1 font-medium text-slate-700">{template.id}</span>
+                  <span className={clsx("rounded-full px-2.5 py-1 font-medium ring-1", reviewStatusStyles[reviewStatus])}>{reviewStatus}</span>
+                </div>
+                <h3 className="mt-2 break-words text-lg font-semibold text-slate-900">编辑测试用例</h3>
+              </div>
+              <button
+                className="grid size-10 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                disabled={saving}
+                title="关闭"
+                type="button"
+                onClick={() => setEditing(false)}
+              >
+                <X className="size-4" />
+              </button>
+            </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto bg-[#f6f8fb] p-5">
+              <div className="grid gap-4 lg:grid-cols-[minmax(0,1fr)_320px]">
+                <div className="grid gap-3 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-medium text-slate-400">标题</span>
+                    <input
+                      className="min-h-11 w-full rounded-lg border border-slate-200 bg-white px-3 text-base font-semibold text-slate-900 outline-none transition focus:border-teal-500"
+                      value={draft.title}
+                      onChange={(event) => setDraft((value) => ({ ...value, title: event.target.value }))}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-medium text-slate-400">模块</span>
+                    <input
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
+                      value={draft.module}
+                      onChange={(event) => setDraft((value) => ({ ...value, module: event.target.value }))}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-medium text-slate-400">测试点</span>
+                    <input
+                      className="min-h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm text-slate-700 outline-none transition focus:border-teal-500"
+                      value={draft.testPoint}
+                      onChange={(event) => setDraft((value) => ({ ...value, testPoint: event.target.value }))}
+                    />
+                  </label>
+                  <label className="grid gap-1.5">
+                    <span className="text-xs font-medium text-slate-400">依据</span>
+                    <textarea
+                      className="min-h-24 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+                      value={draft.evidence}
+                      onChange={(event) => setDraft((value) => ({ ...value, evidence: event.target.value }))}
+                    />
+                  </label>
+                </div>
+
+                <div className="grid content-start gap-3">
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <p className="text-xs font-medium text-slate-400">类型</p>
+                    <div className="mt-2 grid grid-cols-2 gap-1">
+                      {categories.map((category) => (
+                        <button
+                          key={category}
+                          className={clsx(
+                            "h-10 rounded-md px-2 text-sm font-medium transition",
+                            draft.category === category ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                          )}
+                          type="button"
+                          onClick={() => setDraft((value) => ({ ...value, category }))}
+                        >
+                          {category}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                  <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
+                    <p className="text-xs font-medium text-slate-400">优先级</p>
+                    <div className="mt-2 grid grid-cols-3 gap-1">
+                      {priorityOptions.map((priority) => (
+                        <button
+                          key={priority}
+                          className={clsx(
+                            "h-10 rounded-md px-2 text-sm font-medium transition",
+                            draft.priority === priority ? "bg-teal-700 text-white" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                          )}
+                          type="button"
+                          onClick={() => setDraft((value) => ({ ...value, priority }))}
+                        >
+                          {priority}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
+
+              <div className="grid gap-4 lg:grid-cols-3">
+                <label className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <span className="text-xs font-medium uppercase text-slate-400">前置条件</span>
+                  <textarea
+                    className="min-h-44 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+                    value={draft.preconditions}
+                    onChange={(event) => setDraft((value) => ({ ...value, preconditions: event.target.value }))}
+                  />
+                </label>
+                <label className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <span className="text-xs font-medium uppercase text-slate-400">步骤描述</span>
+                  <textarea
+                    className="min-h-44 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+                    value={draft.stepsText}
+                    onChange={(event) => setDraft((value) => ({ ...value, stepsText: event.target.value }))}
+                  />
+                </label>
+                <label className="grid gap-2 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                  <span className="text-xs font-medium uppercase text-slate-400">预期结果</span>
+                  <textarea
+                    className="min-h-44 w-full resize-y rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 text-slate-700 outline-none transition focus:border-teal-500"
+                    value={draft.expectedResultsText}
+                    onChange={(event) => setDraft((value) => ({ ...value, expectedResultsText: event.target.value }))}
+                  />
+                </label>
+              </div>
+            </div>
+
+            <div className="flex shrink-0 flex-col gap-3 border-t border-slate-200 bg-white px-5 py-4 sm:flex-row sm:items-center sm:justify-between">
+              <div className="grid grid-cols-2 gap-1 rounded-lg border border-slate-200 bg-white p-1 sm:flex sm:flex-wrap">
+                {caseReviewStatuses.map((status) => (
+                  <button
+                    key={status}
+                    className={clsx(
+                      "min-h-9 rounded-md px-3 text-sm font-medium transition disabled:cursor-wait",
+                      reviewStatus === status ? "bg-slate-950 text-white shadow-sm" : "text-slate-600 hover:bg-slate-50 hover:text-slate-950",
+                    )}
+                    disabled={updating}
+                    type="button"
+                    onClick={() => onStatusChange(item, status)}
+                  >
+                    {status}
+                  </button>
+                ))}
+              </div>
+              <div className="grid grid-cols-[minmax(0,1fr)_48px] gap-2 sm:w-64">
+                <button
+                  className="inline-flex min-h-11 items-center justify-center gap-1.5 rounded-lg bg-slate-950 px-3 text-sm font-medium text-white transition hover:bg-slate-800 disabled:cursor-wait disabled:bg-slate-400"
+                  disabled={saving}
+                  type="button"
+                  onClick={saveDraft}
+                >
+                  {saving ? <Loader2 className="size-4 animate-spin" /> : <Save className="size-4" />}
+                  保存
+                </button>
+                <button
+                  className="grid size-11 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                  disabled={saving}
+                  title="取消编辑"
+                  type="button"
+                  onClick={() => setEditing(false)}
+                >
+                  <X className="size-4" />
+                </button>
+              </div>
+            </div>
+          </section>
+        </div>
+      ) : null}
+    </>
   );
 }

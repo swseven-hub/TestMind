@@ -1358,6 +1358,17 @@ export default function Home() {
   const workspaceGridClass = leftRailCollapsed ? "grid-cols-[72px_minmax(0,1fr)]" : "grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]";
   const currentAgentHistory = useMemo(() => runHistory.filter((record) => record.agent === activeAgent), [activeAgent, runHistory]);
 
+  useEffect(() => {
+    if (leftRailCollapsed || typeof window === "undefined") return;
+    const collapseAt = 1180;
+    const collapseWhenNarrow = () => {
+      if (window.innerWidth < collapseAt) writeStoredBoolean(storageKeys.leftRailCollapsed, true);
+    };
+    collapseWhenNarrow();
+    window.addEventListener("resize", collapseWhenNarrow);
+    return () => window.removeEventListener("resize", collapseWhenNarrow);
+  }, [leftRailCollapsed]);
+
   const moduleCounts = useMemo(() => {
     const data: Record<string, number> = {};
     for (const item of result?.cases ?? []) data[item.module] = (data[item.module] ?? 0) + 1;
