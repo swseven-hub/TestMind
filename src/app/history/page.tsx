@@ -7,7 +7,6 @@ import {
   ArrowLeft,
   CheckCircle2,
   CheckCheck,
-  ChevronDown,
   CircleAlert,
   ClipboardCheck,
   Download,
@@ -96,10 +95,8 @@ const coverageSeverityLabels: Record<CoverageReviewIssue["severity"], string> = 
 };
 
 const historyUiStorageKeys = {
-  coverageReviewOpen: "testmind.history.coverageReviewOpen.v1",
   leftRailCollapsed: "testmind.history.leftRailCollapsed.v1",
   rightRailCollapsed: "testmind.history.rightRailCollapsed.v1",
-  summaryOpen: "testmind.history.summaryOpen.v1",
 };
 
 const historyUiChangeEvent = "testmind.history-ui-change";
@@ -227,82 +224,39 @@ type EditableCasePatch = Pick<TestCase, "category" | "expectedResult" | "expecte
 
 function CoverageReviewPanel({
   issues,
-  open,
-  onSelectModule,
-  onToggle,
+  onOpen,
 }: {
   issues: CoverageReviewIssue[];
-  open: boolean;
-  onSelectModule: (moduleName: string) => void;
-  onToggle: () => void;
+  onOpen: () => void;
 }) {
   const highCount = issues.filter((item) => item.severity === "high").length;
   const mediumCount = issues.filter((item) => item.severity === "medium").length;
-  const visibleIssues = issues.slice(0, 8);
 
   return (
     <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
-      <button
-        aria-expanded={open}
-        className="flex w-full flex-col gap-3 text-left lg:flex-row lg:items-start lg:justify-between"
-        type="button"
-        onClick={onToggle}
-      >
-        <span className="min-w-0">
-          <div className="flex flex-wrap items-center gap-2">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+        <div className="min-w-0">
+          <div className="flex flex-wrap items-center gap-2 text-sm">
             <ClipboardCheck className="size-4 text-teal-700" />
             <h2 className="font-semibold">覆盖审查</h2>
             <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
               {issues.length ? `${issues.length} 个发现` : "暂未发现明显缺口"}
             </span>
           </div>
-          {open ? (
-            <p className="mt-1 text-sm leading-6 text-slate-500">
-              基于覆盖蓝图和最终用例自动检查模块、测试类型、测试点的缺口，先帮你找最可能漏测的地方。
-            </p>
-          ) : null}
-        </span>
-        <span className="flex shrink-0 flex-wrap items-center gap-2">
+          <p className="mt-1 text-sm text-slate-500">点击查看覆盖缺口、风险等级和对应模块。</p>
+        </div>
+        <div className="flex shrink-0 flex-wrap items-center gap-2">
           <span className="rounded-full bg-rose-50 px-2.5 py-1 text-xs font-medium text-rose-700 ring-1 ring-rose-200">高风险 {highCount}</span>
           <span className="rounded-full bg-amber-50 px-2.5 py-1 text-xs font-medium text-amber-700 ring-1 ring-amber-200">需关注 {mediumCount}</span>
-          <ChevronDown className={clsx("size-5 text-slate-500 transition", open && "rotate-180")} />
-        </span>
-      </button>
-
-      {open && visibleIssues.length ? (
-        <div className="mt-4 grid gap-2">
-          {visibleIssues.map((issue) => (
-            <div key={issue.id} className={clsx("rounded-lg border px-3 py-2", coverageSeverityStyles[issue.severity])}>
-              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
-                <div className="min-w-0">
-                  <div className="flex flex-wrap items-center gap-2">
-                    <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold ring-1 ring-current/10">
-                      {coverageSeverityLabels[issue.severity]}
-                    </span>
-                    <p className="font-medium">{issue.title}</p>
-                  </div>
-                  <p className="mt-1 break-words text-sm leading-6 opacity-90">{issue.detail}</p>
-                </div>
-                {issue.moduleName ? (
-                  <button
-                    className="shrink-0 rounded-md bg-white/70 px-2.5 py-1 text-xs font-medium ring-1 ring-current/10 transition hover:bg-white"
-                    type="button"
-                    onClick={() => onSelectModule(issue.moduleName as string)}
-                  >
-                    查看模块
-                  </button>
-                ) : null}
-              </div>
-            </div>
-          ))}
+          <button
+            className="inline-flex min-h-9 items-center justify-center rounded-lg bg-slate-950 px-3 text-sm font-medium text-white transition hover:bg-slate-800"
+            type="button"
+            onClick={onOpen}
+          >
+            查看覆盖审查
+          </button>
         </div>
-      ) : (
-        open ? (
-        <div className="mt-4 rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-800">
-          当前结果与覆盖蓝图的模块、类型和测试点目标基本匹配，后续可以进入人工确认和定稿导出。
-        </div>
-        ) : null
-      )}
+      </div>
     </section>
   );
 }
@@ -313,10 +267,10 @@ export default function HistoryPage() {
   const [activeId, setActiveId] = useState("");
   const [activeModule, setActiveModule] = useState("全部");
   const [activeReviewStatus, setActiveReviewStatus] = useState<CaseReviewStatus | "全部">("全部");
-  const [coverageReviewOpen, setCoverageReviewOpen] = useStoredBoolean(historyUiStorageKeys.coverageReviewOpen, true);
   const [leftRailCollapsed, setLeftRailCollapsed] = useStoredBoolean(historyUiStorageKeys.leftRailCollapsed, false);
   const [rightRailCollapsed, setRightRailCollapsed] = useStoredBoolean(historyUiStorageKeys.rightRailCollapsed, false);
-  const [summaryOpen, setSummaryOpen] = useStoredBoolean(historyUiStorageKeys.summaryOpen, true);
+  const [summaryModalOpen, setSummaryModalOpen] = useState(false);
+  const [coverageModalOpen, setCoverageModalOpen] = useState(false);
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [updatingStatusKey, setUpdatingStatusKey] = useState("");
   const [updatingCaseKey, setUpdatingCaseKey] = useState("");
@@ -711,14 +665,9 @@ export default function HistoryPage() {
           {selectedRecord ? (
             <>
               <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
-                <button
-                  aria-expanded={summaryOpen}
-                  className="flex w-full items-start justify-between gap-4 text-left"
-                  type="button"
-                  onClick={() => setSummaryOpen(!summaryOpen)}
-                >
-                  <span className="min-w-0">
-                    <span className="flex flex-wrap items-center gap-2 text-sm font-medium text-teal-700">
+                <div className="flex flex-col gap-4 lg:flex-row lg:items-start lg:justify-between">
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-teal-700">
                       <FileText className="size-4" />
                       <span className="min-w-0 break-words">
                         {providerLabels[selectedRecord.provider]} / {selectedRecord.model}
@@ -728,53 +677,22 @@ export default function HistoryPage() {
                       <span className={clsx("rounded-full px-2 py-0.5 text-xs font-medium ring-1", statusStyles[selectedRecord.status])}>
                         {statusLabels[selectedRecord.status]}
                       </span>
-                    </span>
-                    <span className="mt-2 block break-words text-2xl font-semibold tracking-normal">{selectedRecord.fileName}</span>
-                    <span className="mt-2 block max-w-5xl break-words text-sm leading-6 text-slate-500">
-                      {summaryOpen
-                        ? selectedRecord.result.summary
-                        : `${selectedRecord.caseCount} 条用例 · ${moduleNames.length} 个模块 · ${formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)}`}
-                    </span>
-                  </span>
-                  <ChevronDown className={clsx("mt-1 size-5 shrink-0 text-slate-500 transition", summaryOpen && "rotate-180")} />
-                </button>
-
-                {summaryOpen ? (
-                  <div className="mt-4 space-y-4">
-                    <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3 2xl:grid-cols-6">
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">用例</p>
-                        <p className="mt-1 font-semibold text-slate-800">{selectedRecord.caseCount} 条</p>
-                      </div>
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">模块</p>
-                        <p className="mt-1 font-semibold text-slate-800">{moduleNames.length} 个</p>
-                      </div>
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">时间</p>
-                        <p className="mt-1 break-words font-semibold text-slate-800">{formatRunTime(selectedRecord.createdAt)}</p>
-                      </div>
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">耗时</p>
-                        <p className="mt-1 font-semibold text-slate-800">{formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)}</p>
-                      </div>
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">Token</p>
-                        <p className="mt-1 font-semibold text-slate-800">{formatTokens(selectedRecord.usage?.totalTokens ?? selectedRecord.result.stats?.usage?.totalTokens)}</p>
-                      </div>
-                      <div className="min-w-0 rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
-                        <p className="text-xs text-slate-400">估算费用</p>
-                        <p className="mt-1 font-semibold text-slate-800">
-                          {selectedRecord.result.stats?.estimatedCostCny === null || selectedRecord.result.stats?.estimatedCostCny === undefined
-                            ? "未估算"
-                            : `¥${selectedRecord.result.stats.estimatedCostCny < 0.01 ? selectedRecord.result.stats.estimatedCostCny.toFixed(4) : selectedRecord.result.stats.estimatedCostCny.toFixed(2)}`}
-                        </p>
-                      </div>
                     </div>
+                    <h2 className="mt-2 break-words text-2xl font-semibold tracking-normal">{selectedRecord.fileName}</h2>
+                    <p className="mt-2 text-sm text-slate-500">
+                      {selectedRecord.caseCount} 条用例 · {moduleNames.length} 个模块 · {formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)}
+                    </p>
                   </div>
-                ) : null}
+                  <button
+                    className="inline-flex min-h-10 shrink-0 items-center justify-center rounded-lg bg-slate-950 px-4 text-sm font-medium text-white transition hover:bg-slate-800"
+                    type="button"
+                    onClick={() => setSummaryModalOpen(true)}
+                  >
+                    查看运行概览
+                  </button>
+                </div>
 
-                <div className="mt-4 flex flex-wrap gap-2">
+                <div className="mt-3 flex flex-wrap gap-2">
                   {categories.map((category) => {
                     const count = categoryCounts[category];
                     if (!count) return null;
@@ -786,64 +704,6 @@ export default function HistoryPage() {
                   })}
                 </div>
 
-                {selectedRecord.result.warnings.length ? (
-                  <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-800">
-                    {selectedRecord.result.warnings.join(" ")}
-                  </div>
-                ) : null}
-
-                {selectedRecord.status !== "success" ? (
-                  <div className="mt-4 min-w-0 rounded-lg border border-slate-200 bg-slate-50 p-4">
-                    <div className="flex flex-wrap items-center justify-between gap-3">
-                      <h3 className="text-sm font-semibold text-slate-800">运行日志详情</h3>
-                      <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", statusStyles[selectedRecord.status])}>
-                        {statusLabels[selectedRecord.status]}
-                      </span>
-                    </div>
-                    <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
-                      <div>
-                        <p className="text-xs text-slate-400">失败/停止阶段</p>
-                        <p className="mt-1 break-words text-slate-700">{selectedRecord.failedStage || "未记录"}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400">错误信息</p>
-                        <p className="mt-1 break-words text-slate-700">{selectedRecord.errorMessage || selectedRecord.errorDetail || "未记录"}</p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400">供应商 / 模型</p>
-                        <p className="mt-1 break-words text-slate-700">
-                          {providerLabels[selectedRecord.provider]} / {selectedRecord.model}
-                          {selectedRecord.result.stats?.reasoningEffort ? ` / 推理${reasoningEffortLabels[selectedRecord.result.stats.reasoningEffort]}` : ""}
-                        </p>
-                      </div>
-                      <div>
-                        <p className="text-xs text-slate-400">耗时 / Token</p>
-                        <p className="mt-1 break-words text-slate-700">
-                          {formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)} /{" "}
-                          {formatTokens(selectedRecord.usage?.totalTokens ?? selectedRecord.result.stats?.usage?.totalTokens)}
-                        </p>
-                      </div>
-                    </div>
-                    {selectedRecord.errorDetail ? (
-                      <div className="mt-3">
-                        <p className="text-xs text-slate-400">错误详情</p>
-                        <p className="mt-1 break-words text-sm leading-6 text-slate-700">{selectedRecord.errorDetail}</p>
-                      </div>
-                    ) : null}
-                    <details className="mt-3 min-w-0">
-                      <summary className="cursor-pointer text-sm font-medium text-slate-700">查看原始错误和最后一次事件</summary>
-                      <div className="mt-2 grid min-w-0 gap-3 lg:grid-cols-2">
-                        <pre className="min-w-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-3 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
-                          {selectedRecord.errorRaw || "未记录"}
-                        </pre>
-                        <pre className="min-w-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-white p-3 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
-                          {formatJsonPreview(selectedRecord.lastEvent)}
-                        </pre>
-                      </div>
-                    </details>
-                  </div>
-                ) : null}
-
                 {error ? (
                   <div className="mt-4 rounded-lg border border-rose-200 bg-rose-50 px-3 py-2 text-sm text-rose-700">{error}</div>
                 ) : null}
@@ -851,10 +711,195 @@ export default function HistoryPage() {
 
               <CoverageReviewPanel
                 issues={coverageIssues}
-                open={coverageReviewOpen}
-                onSelectModule={focusCoverageModule}
-                onToggle={() => setCoverageReviewOpen(!coverageReviewOpen)}
+                onOpen={() => setCoverageModalOpen(true)}
               />
+
+              {summaryModalOpen ? (
+                <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+                  <section className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl min-w-0 flex-col overflow-hidden rounded-lg bg-white shadow-2xl ring-1 ring-slate-900/10">
+                    <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2 text-sm font-medium text-teal-700">
+                          <FileText className="size-4" />
+                          <span className="min-w-0 break-words">
+                            {providerLabels[selectedRecord.provider]} / {selectedRecord.model}
+                            {selectedRecord.thinkingMode ? ` / ${thinkingModeLabels[selectedRecord.thinkingMode]}` : ""}
+                            {selectedRecord.result.stats?.reasoningEffort ? ` / 推理${reasoningEffortLabels[selectedRecord.result.stats.reasoningEffort]}` : ""}
+                          </span>
+                          <span className={clsx("rounded-full px-2 py-0.5 text-xs font-medium ring-1", statusStyles[selectedRecord.status])}>
+                            {statusLabels[selectedRecord.status]}
+                          </span>
+                        </div>
+                        <h2 className="mt-2 break-words text-xl font-semibold text-slate-950">{selectedRecord.fileName}</h2>
+                      </div>
+                      <button
+                        className="grid size-10 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                        title="关闭"
+                        type="button"
+                        onClick={() => setSummaryModalOpen(false)}
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                    <div className="scrollbar-hidden min-h-0 flex-1 space-y-4 overflow-y-auto bg-[#f6f8fb] p-5">
+                      <div className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                        <h3 className="text-sm font-semibold text-slate-800">运行摘要</h3>
+                        <p className="mt-2 break-words text-sm leading-6 text-slate-600">{selectedRecord.result.summary}</p>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2 text-sm md:grid-cols-3 2xl:grid-cols-6">
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">用例</p>
+                          <p className="mt-1 font-semibold text-slate-800">{selectedRecord.caseCount} 条</p>
+                        </div>
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">模块</p>
+                          <p className="mt-1 font-semibold text-slate-800">{moduleNames.length} 个</p>
+                        </div>
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">时间</p>
+                          <p className="mt-1 break-words font-semibold text-slate-800">{formatRunTime(selectedRecord.createdAt)}</p>
+                        </div>
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">耗时</p>
+                          <p className="mt-1 font-semibold text-slate-800">{formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)}</p>
+                        </div>
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">Token</p>
+                          <p className="mt-1 font-semibold text-slate-800">{formatTokens(selectedRecord.usage?.totalTokens ?? selectedRecord.result.stats?.usage?.totalTokens)}</p>
+                        </div>
+                        <div className="min-w-0 rounded-lg bg-white px-3 py-2 ring-1 ring-slate-200">
+                          <p className="text-xs text-slate-400">估算费用</p>
+                          <p className="mt-1 font-semibold text-slate-800">
+                            {selectedRecord.result.stats?.estimatedCostCny === null || selectedRecord.result.stats?.estimatedCostCny === undefined
+                              ? "未估算"
+                              : `¥${selectedRecord.result.stats.estimatedCostCny < 0.01 ? selectedRecord.result.stats.estimatedCostCny.toFixed(4) : selectedRecord.result.stats.estimatedCostCny.toFixed(2)}`}
+                          </p>
+                        </div>
+                      </div>
+                      {selectedRecord.result.warnings.length ? (
+                        <div className="rounded-lg border border-amber-200 bg-amber-50 px-3 py-2 text-sm leading-6 text-amber-800">
+                          {selectedRecord.result.warnings.join(" ")}
+                        </div>
+                      ) : null}
+                      {selectedRecord.status !== "success" ? (
+                        <div className="min-w-0 rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+                          <div className="flex flex-wrap items-center justify-between gap-3">
+                            <h3 className="text-sm font-semibold text-slate-800">运行日志详情</h3>
+                            <span className={clsx("rounded-full px-2.5 py-1 text-xs font-medium ring-1", statusStyles[selectedRecord.status])}>
+                              {statusLabels[selectedRecord.status]}
+                            </span>
+                          </div>
+                          <div className="mt-3 grid gap-3 text-sm md:grid-cols-2">
+                            <div>
+                              <p className="text-xs text-slate-400">失败/停止阶段</p>
+                              <p className="mt-1 break-words text-slate-700">{selectedRecord.failedStage || "未记录"}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-400">错误信息</p>
+                              <p className="mt-1 break-words text-slate-700">{selectedRecord.errorMessage || selectedRecord.errorDetail || "未记录"}</p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-400">供应商 / 模型</p>
+                              <p className="mt-1 break-words text-slate-700">
+                                {providerLabels[selectedRecord.provider]} / {selectedRecord.model}
+                                {selectedRecord.result.stats?.reasoningEffort ? ` / 推理${reasoningEffortLabels[selectedRecord.result.stats.reasoningEffort]}` : ""}
+                              </p>
+                            </div>
+                            <div>
+                              <p className="text-xs text-slate-400">耗时 / Token</p>
+                              <p className="mt-1 break-words text-slate-700">
+                                {formatDuration(selectedRecord.durationMs ?? selectedRecord.result.stats?.durationMs)} /{" "}
+                                {formatTokens(selectedRecord.usage?.totalTokens ?? selectedRecord.result.stats?.usage?.totalTokens)}
+                              </p>
+                            </div>
+                          </div>
+                          {selectedRecord.errorDetail ? (
+                            <div className="mt-3">
+                              <p className="text-xs text-slate-400">错误详情</p>
+                              <p className="mt-1 break-words text-sm leading-6 text-slate-700">{selectedRecord.errorDetail}</p>
+                            </div>
+                          ) : null}
+                          <details className="mt-3 min-w-0">
+                            <summary className="cursor-pointer text-sm font-medium text-slate-700">查看原始错误和最后一次事件</summary>
+                            <div className="mt-2 grid min-w-0 gap-3 lg:grid-cols-2">
+                              <pre className="min-w-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+                                {selectedRecord.errorRaw || "未记录"}
+                              </pre>
+                              <pre className="min-w-0 max-h-56 overflow-auto whitespace-pre-wrap break-words rounded-md bg-slate-50 p-3 text-xs leading-5 text-slate-600 ring-1 ring-slate-200">
+                                {formatJsonPreview(selectedRecord.lastEvent)}
+                              </pre>
+                            </div>
+                          </details>
+                        </div>
+                      ) : null}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
+
+              {coverageModalOpen ? (
+                <div className="fixed inset-0 z-50 grid place-items-center bg-slate-950/45 p-4 backdrop-blur-sm">
+                  <section className="flex max-h-[calc(100vh-2rem)] w-full max-w-6xl min-w-0 flex-col overflow-hidden rounded-lg bg-white shadow-2xl ring-1 ring-slate-900/10">
+                    <div className="flex shrink-0 items-start justify-between gap-4 border-b border-slate-200 px-5 py-4">
+                      <div className="min-w-0">
+                        <div className="flex flex-wrap items-center gap-2">
+                          <ClipboardCheck className="size-4 text-teal-700" />
+                          <h2 className="font-semibold text-slate-950">覆盖审查</h2>
+                          <span className="rounded-full bg-slate-100 px-2 py-0.5 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+                            {coverageIssues.length ? `${coverageIssues.length} 个发现` : "暂未发现明显缺口"}
+                          </span>
+                        </div>
+                        <p className="mt-1 text-sm leading-6 text-slate-500">基于覆盖蓝图和最终用例自动检查模块、测试类型、测试点的缺口。</p>
+                      </div>
+                      <button
+                        className="grid size-10 shrink-0 place-items-center rounded-lg border border-slate-200 bg-white text-slate-500 transition hover:bg-slate-50 hover:text-slate-900"
+                        title="关闭"
+                        type="button"
+                        onClick={() => setCoverageModalOpen(false)}
+                      >
+                        <X className="size-4" />
+                      </button>
+                    </div>
+                    <div className="scrollbar-hidden min-h-0 flex-1 overflow-y-auto bg-[#f6f8fb] p-5">
+                      {coverageIssues.length ? (
+                        <div className="grid gap-2">
+                          {coverageIssues.map((issue) => (
+                            <div key={issue.id} className={clsx("rounded-lg border px-3 py-2", coverageSeverityStyles[issue.severity])}>
+                              <div className="flex flex-col gap-2 sm:flex-row sm:items-start sm:justify-between">
+                                <div className="min-w-0">
+                                  <div className="flex flex-wrap items-center gap-2">
+                                    <span className="rounded-full bg-white/70 px-2 py-0.5 text-xs font-semibold ring-1 ring-current/10">
+                                      {coverageSeverityLabels[issue.severity]}
+                                    </span>
+                                    <p className="font-medium">{issue.title}</p>
+                                  </div>
+                                  <p className="mt-1 break-words text-sm leading-6 opacity-90">{issue.detail}</p>
+                                </div>
+                                {issue.moduleName ? (
+                                  <button
+                                    className="shrink-0 rounded-md bg-white/70 px-2.5 py-1 text-xs font-medium ring-1 ring-current/10 transition hover:bg-white"
+                                    type="button"
+                                    onClick={() => {
+                                      setCoverageModalOpen(false);
+                                      focusCoverageModule(issue.moduleName as string);
+                                    }}
+                                  >
+                                    查看模块
+                                  </button>
+                                ) : null}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <div className="rounded-lg border border-emerald-200 bg-emerald-50 px-3 py-2 text-sm leading-6 text-emerald-800">
+                          当前结果与覆盖蓝图的模块、类型和测试点目标基本匹配，后续可以进入人工确认和定稿导出。
+                        </div>
+                      )}
+                    </div>
+                  </section>
+                </div>
+              ) : null}
 
               {groupedCases.length ? (
                 <div className="grid gap-5">
