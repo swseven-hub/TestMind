@@ -383,10 +383,10 @@ export default function HistoryPage() {
   const workspaceGridClass = leftRailCollapsed
     ? rightRailCollapsed
       ? "grid-cols-[72px_minmax(0,1fr)_72px]"
-      : "grid-cols-[72px_minmax(0,1fr)_240px] xl:grid-cols-[72px_minmax(0,1fr)_280px]"
+      : "grid-cols-[72px_minmax(0,1fr)_280px] xl:grid-cols-[72px_minmax(0,1fr)_320px]"
     : rightRailCollapsed
       ? "grid-cols-[300px_minmax(0,1fr)_72px] xl:grid-cols-[360px_minmax(0,1fr)_72px]"
-      : "grid-cols-[300px_minmax(0,1fr)_240px] xl:grid-cols-[360px_minmax(0,1fr)_280px]";
+      : "grid-cols-[300px_minmax(0,1fr)_280px] xl:grid-cols-[360px_minmax(0,1fr)_320px]";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -989,7 +989,7 @@ export default function HistoryPage() {
         </section>
 
         <aside className="min-w-0">
-          <div className="sticky top-5 max-h-[calc(100vh-2.5rem)] space-y-3 overflow-y-auto pr-1">
+          <div className="scrollbar-hidden sticky top-5 max-h-[calc(100vh-2.5rem)] space-y-3 overflow-y-auto">
             {rightRailCollapsed ? (
               <div className="rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
                 <div className="flex items-center justify-center gap-2 lg:flex-col">
@@ -1056,7 +1056,7 @@ export default function HistoryPage() {
                       </button>
                     ) : null}
                   </div>
-                  <div className="mt-3 grid max-h-[42vh] gap-1.5 overflow-y-auto pr-1">
+                  <div className="scrollbar-hidden mt-3 grid max-h-[42vh] gap-1.5 overflow-y-auto">
                     <button
                       aria-pressed={currentModule === "全部"}
                       className={clsx(
