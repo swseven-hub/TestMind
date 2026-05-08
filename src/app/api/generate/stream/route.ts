@@ -21,11 +21,14 @@ import type {
   CoverageTestPoint,
   GenerateResponse,
   GenerationModuleStats,
+  GenerationQualityReport,
   GenerationUsage,
+  QualityFinding,
   ReasoningEffort,
   RiskLevel,
   TestCase,
   TestCategory,
+  TestDesignTechnique,
   TestPriority,
   ThinkingMode,
 } from "@/types/test-case";
@@ -34,6 +37,8 @@ export const runtime = "nodejs";
 export const maxDuration = 300;
 
 type LlmProvider = "openai" | "deepseek" | "aliyun" | "velotric";
+
+type GenerationMode = "strategy" | "cases";
 
 type StreamEvent =
   | { type: "stage"; message: string; detail?: string }
@@ -59,7 +64,17 @@ type CaseBatchResponse = {
   cases: TestCase[];
 };
 
+type QualityReviewResponse = {
+  score?: number;
+  summary?: string;
+  revisedCaseCount?: number;
+  findingCount?: number;
+  findings?: QualityFinding[];
+  cases: TestCase[];
+};
+
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
+const designTechniques: TestDesignTechnique[] = ["等价类", "边界值", "判定表", "状态迁移", "流程分支", "权限矩阵", "组合覆盖", "接口契约", "幂等", "并发", "回滚"];
 const priorities: TestPriority[] = ["P0", "P1", "P2"];
 const complexityBounds: Record<Complexity, { min: number; max: number; base: number; perPoint: number; perRisk: number }> = {
   minimal: { min: 4, max: 14, base: 4, perPoint: 2, perRisk: 1 },
@@ -160,6 +175,10 @@ const providerDefaults: Record<LlmProvider, { label: string; model: string; base
 function getProvider(value: FormDataEntryValue | null): LlmProvider {
   if (value === "openai" || value === "aliyun" || value === "velotric") return value;
   return "deepseek";
+}
+
+function getGenerationMode(value: FormDataEntryValue | null): GenerationMode {
+  return value === "strategy" ? "strategy" : "cases";
 }
 
 async function extractPdfText(file: File) {
@@ -537,6 +556,20 @@ function normalizeStringList(value: unknown, limit: number) {
   return value.map((item) => String(item).trim()).filter(Boolean).slice(0, limit);
 }
 
+function normalizeDesignTechniques(value: unknown, fallback: TestDesignTechnique[] = []) {
+  const rawItems = Array.isArray(value)
+    ? value
+    : typeof value === "string"
+      ? value.split(/[、,，/｜|\s]+/)
+      : [];
+  const matched = rawItems
+    .map((item) => String(item).trim())
+    .flatMap((item) => designTechniques.filter((technique) => item === technique || item.includes(technique) || technique.includes(item)))
+    .filter((item, index, source) => source.indexOf(item) === index)
+    .slice(0, 8);
+  return matched.length ? matched : fallback.slice(0, 8);
+}
+
 function sanitizeCategoryTargets(value: unknown, max = 999): CategoryTargetMap {
   const source = typeof value === "object" && value !== null ? (value as Record<string, unknown>) : {};
   return Object.fromEntries(categories.map((category) => [category, clamp(Math.round(Number(source[category] ?? 0) || 0), 0, max)])) as Record<TestCategory, number>;
@@ -554,11 +587,14 @@ function normalizeTestPoint(value: string | Partial<CoverageTestPoint>, index: n
       id: `TP-${String(index + 1).padStart(2, "0")}`,
       name,
       evidence: "PRD 显式描述",
+      requirementSection: "PRD 显式描述",
+      sourceQuote: name,
       fields: [],
       states: [],
       roles: [],
       flows: [],
       rules: [],
+      designTechniques: ["等价类"],
       riskLevel: "medium",
       riskFactors: [],
       coverage,
@@ -574,15 +610,20 @@ function normalizeTestPoint(value: string | Partial<CoverageTestPoint>, index: n
     id: value.id?.trim() || `TP-${String(index + 1).padStart(2, "0")}`,
     name,
     evidence: value.evidence?.trim() || "PRD 显式描述",
+    requirementId: value.requirementId?.trim(),
+    requirementSection: value.requirementSection?.trim(),
+    sourceQuote: value.sourceQuote?.trim() || value.evidence?.trim(),
     fields: normalizeStringList(value.fields, 12),
     states: normalizeStringList(value.states, 12),
     roles: normalizeStringList(value.roles, 12),
     flows: normalizeStringList(value.flows, 12),
     rules: normalizeStringList(value.rules, 12),
+    designTechniques: normalizeDesignTechniques(value.designTechniques, ["等价类"]),
     riskLevel: normalizeRiskLevel(value.riskLevel),
     riskFactors: normalizeStringList(value.riskFactors, 12),
     coverage: coverageTotal(coverage) > 0 ? coverage : { 功能: expectedCaseCount },
     expectedCaseCount,
+    locked: Boolean(value.locked),
   };
 }
 
@@ -616,14 +657,18 @@ function hasCategorySignal(module: ModulePlan, category: Exclude<TestCategory, "
   const pointText = module.testPoints.flatMap((point) => [
     point.name,
     point.evidence,
+    point.requirementId,
+    point.requirementSection,
+    point.sourceQuote,
     ...point.fields,
     ...point.states,
     ...point.roles,
     ...point.flows,
     ...point.rules,
+    ...(point.designTechniques ?? []),
     ...point.riskFactors,
   ]);
-  const text = [module.name, module.parent, module.description, ...pointText, ...(module.riskPoints ?? [])].filter(Boolean).join(" ");
+  const text = [module.name, module.parent, module.description, ...(module.designTechniques ?? []), ...pointText, ...(module.riskPoints ?? [])].filter(Boolean).join(" ");
   return categorySignalWords[category].some((word) => text.includes(word));
 }
 
@@ -675,7 +720,7 @@ function normalizeCategoryTargets(module: ModulePlan, total: number): CategoryTa
   return targets;
 }
 
-function normalizeModulePlan(payload: ModulePlanResponse) {
+function normalizeModulePlan(payload: ModulePlanResponse, options: { preserveSubmittedTargets?: boolean } = {}) {
   const seen = new Set<string>();
   const documentComplexity = normalizeComplexity(payload.documentComplexity, "medium");
   const modules = (payload.modules ?? [])
@@ -693,10 +738,12 @@ function normalizeModulePlan(payload: ModulePlanResponse) {
         isCore: Boolean(item.isCore),
         testPoints,
         riskPoints: normalizeStringList(item.riskPoints, 16),
+        designTechniques: normalizeDesignTechniques(item.designTechniques, testPoints.flatMap((point) => point.designTechniques ?? [])),
         categoryTargets: sanitizeCategoryTargets(item.categoryTargets),
         skippedCategories: normalizeStringList(item.skippedCategories, 8),
         coverageNotes: normalizeStringList(item.coverageNotes, 8),
         targetCaseCount: typeof item.targetCaseCount === "number" && Number.isFinite(item.targetCaseCount) ? item.targetCaseCount : 0,
+        locked: Boolean(item.locked),
       };
     })
     .filter((item): item is ModulePlan => item !== null)
@@ -711,13 +758,37 @@ function normalizeModulePlan(payload: ModulePlanResponse) {
   return modules.map((item) => {
     const complexity = refineComplexity(item, documentComplexity);
     const normalized = { ...item, complexity, name: item.name || "未命名模块" } as ModulePlan;
-    const targetCaseCount = estimateTargetCaseCount(normalized);
+    const submittedCategoryTotal = coverageTotal(normalized.categoryTargets);
+    const targetCaseCount = options.preserveSubmittedTargets
+      ? clamp(Math.round(normalized.targetCaseCount || submittedCategoryTotal || estimateTargetCaseCount(normalized)), 1, 160)
+      : estimateTargetCaseCount(normalized);
     return {
       ...normalized,
       targetCaseCount,
       categoryTargets: normalizeCategoryTargets(normalized, targetCaseCount),
     };
   });
+}
+
+function normalizeCoverageBlueprintInput(value: unknown): CoverageBlueprint {
+  const payload = value as Partial<CoverageBlueprint> | null;
+  if (!payload || !Array.isArray(payload.modules)) throw new Error("测试策略格式不正确，请重新生成覆盖蓝图。");
+  const documentComplexity = normalizeComplexity(payload.documentComplexity, "medium");
+  const modules = normalizeModulePlan(
+    {
+      documentComplexity,
+      coverageRationale: payload.coverageRationale,
+      modules: payload.modules,
+    },
+    { preserveSubmittedTargets: true },
+  );
+  if (!modules.length) throw new Error("测试策略中没有可生成的模块。");
+  return buildCoverageBlueprint(documentComplexity, payload.coverageRationale?.trim() || "按已确认测试策略生成测试用例。", modules);
+}
+
+function parseCoverageBlueprintInput(value: FormDataEntryValue | null) {
+  if (typeof value !== "string" || !value.trim()) return undefined;
+  return normalizeCoverageBlueprintInput(parseJsonObject<CoverageBlueprint>(value));
 }
 
 function getRelevantPrdText(text: string, module: ModulePlan) {
@@ -728,11 +799,15 @@ function getRelevantPrdText(text: string, module: ModulePlan) {
   const testPointKeywords = module.testPoints.flatMap((point) => [
     point.name,
     point.evidence,
+    point.requirementId,
+    point.requirementSection,
+    point.sourceQuote,
     ...point.fields,
     ...point.states,
     ...point.roles,
     ...point.flows,
     ...point.rules,
+    ...(point.designTechniques ?? []),
     ...point.riskFactors,
   ]);
   const keywords = [module.name, module.parent, ...testPointKeywords, ...(module.riskPoints ?? [])]
@@ -798,11 +873,15 @@ function formatTargets(targets: ReturnType<typeof getCaseTargets>) {
 function formatTestPointForPrompt(point: CoverageTestPoint, index: number) {
   const coverage = categories.map((category) => `${category}:${point.coverage[category] ?? 0}`).join("、");
   const details = [
+    `需求编号:${point.requirementId || "无"}`,
+    `章节:${point.requirementSection || "无"}`,
+    `原文:${point.sourceQuote || point.evidence || "无"}`,
     `字段:${point.fields.join("、") || "无"}`,
     `状态:${point.states.join("、") || "无"}`,
     `角色:${point.roles.join("、") || "无"}`,
     `流程:${point.flows.join("、") || "无"}`,
     `规则:${point.rules.join("、") || "无"}`,
+    `设计方法:${point.designTechniques?.join("、") || "等价类"}`,
     `风险:${point.riskFactors.join("、") || "无"}`,
   ].join("；");
   return `${index + 1}. ${point.id}｜${point.name}｜依据：${point.evidence}｜风险：${point.riskLevel}｜覆盖：${coverage}｜${details}`;
@@ -841,7 +920,29 @@ function getCoverageGaps(cases: TestCase[], targets: ReturnType<typeof getCaseTa
   };
 }
 
-function normalizeCases(cases: TestCase[], module: ModulePlan) {
+function normalizeQualityFindings(value: unknown, limit = 8): QualityFinding[] {
+  if (!Array.isArray(value)) return [];
+  return value
+    .map((item): QualityFinding | null => {
+      const source = item as Partial<QualityFinding>;
+      const severity: QualityFinding["severity"] = source.severity === "high" || source.severity === "medium" || source.severity === "info" ? source.severity : "info";
+      const detail = source.detail?.trim();
+      const suggestion = source.suggestion?.trim();
+      if (!detail && !suggestion) return null;
+      return {
+        severity,
+        issueType: source.issueType?.trim() || "质量审查",
+        caseId: source.caseId?.trim(),
+        title: source.title?.trim(),
+        detail: detail || "需要人工确认该用例质量。",
+        suggestion: suggestion || "请补充可执行步骤、可验证预期和 PRD 依据。",
+      };
+    })
+    .filter((item): item is QualityFinding => item !== null)
+    .slice(0, limit);
+}
+
+function normalizeCases(cases: TestCase[], module: ModulePlan): TestCase[] {
   return cases
     .map((item) => {
       const category = categories.includes(item.category) ? item.category : "功能";
@@ -861,15 +962,24 @@ function normalizeCases(cases: TestCase[], module: ModulePlan) {
         estimatedHours: normalizeNullableNumber(item.estimatedHours),
         remainingHours: normalizeNullableNumber(item.remainingHours),
         relatedWorkItems: normalizeTemplateText(item.relatedWorkItems),
+        requirementId: item.requirementId?.trim(),
+        requirementSection: item.requirementSection?.trim(),
+        sourceQuote: item.sourceQuote?.trim(),
         testPointId: item.testPointId?.trim(),
         testPoint: item.testPoint?.trim(),
         evidence: item.evidence?.trim(),
+        fieldsCovered: normalizeStringList(item.fieldsCovered, 12),
+        statesCovered: normalizeStringList(item.statesCovered, 12),
+        rulesCovered: normalizeStringList(item.rulesCovered, 12),
+        riskTags: normalizeStringList(item.riskTags, 12),
+        designTechniques: normalizeDesignTechniques(item.designTechniques),
         preconditions: item.preconditions?.trim() || `${formatModuleName(module)}模块可访问，测试数据和依赖服务可用。`,
         steps: (item.steps ?? []).map((step) => step.trim()).filter(Boolean),
         expectedResults: expectedResults.length ? expectedResults : undefined,
         expectedResult: item.expectedResult?.trim() || "结果符合 PRD 预期。",
         followers: normalizeTemplateText(item.followers, maintainer),
         remarks: normalizeTemplateText(item.remarks),
+        qualityFindings: normalizeQualityFindings(item.qualityFindings),
       };
     })
     .filter((item) => item.title && item.steps.length >= 1);
@@ -980,19 +1090,21 @@ async function generateModulePlan({
 4. testPoints 必须是原子测试点对象数组，不要把多个测试点合成一句；只列 PRD 有依据的测试点。
 5. riskPoints 列出该模块需要重点覆盖的边界、异常、权限、安全、兼容、性能、数据一致性和幂等风险。
 6. complexity 只能是 minimal/simple/medium/complex/large；riskLevel 只能是 low/medium/high/critical。
-7. 每个 testPoint 必须包含 evidence、fields、states、roles、flows、rules、riskLevel、riskFactors、coverage、expectedCaseCount。
-8. evidence 写 PRD 中可定位的依据，例如章节标题、条款、原文短句，不要写“自行推断”。
-9. coverage 是该原子测试点各类型建议生成条数，必须由字段、状态、角色、流程、规则和风险决定。没有依据的类型填 0。
-10. categoryTargets 是该模块各类型建议生成条数，必须等于所有 testPoint.coverage 的汇总。若某类型无 PRD 依据或不适用，数量填 0，并在 skippedCategories 说明。
-11. targetCaseCount 必须等于 categoryTargets 五类之和。数量建议：
+7. 每个模块和 testPoint 都要给出 designTechniques，只能从这些测试设计方法中选择：${designTechniques.join("、")}。
+8. 每个 testPoint 必须包含 evidence、requirementId、requirementSection、sourceQuote、fields、states、roles、flows、rules、designTechniques、riskLevel、riskFactors、coverage、expectedCaseCount。
+9. requirementId 写 PRD 中的需求编号/条款编号/故事编号；没有明确编号填空字符串。requirementSection 写章节或页面/接口/流程标题。sourceQuote 写不超过 80 字的原文证据。
+10. evidence 写 PRD 中可定位的依据，例如章节标题、条款、原文短句，不要写“自行推断”。
+11. coverage 是该原子测试点各类型建议生成条数，必须由字段、状态、角色、流程、规则、设计方法和风险决定。没有依据的类型填 0。
+12. categoryTargets 是该模块各类型建议生成条数，必须等于所有 testPoint.coverage 的汇总。若某类型无 PRD 依据或不适用，数量填 0，并在 skippedCategories 说明。
+13. targetCaseCount 必须等于 categoryTargets 五类之和。数量建议：
    - minimal 模块通常 4-12 条。
    - simple 模块通常 8-20 条。
    - medium 模块通常 16-36 条。
    - complex/large 核心模块通常 32-64 条。
    这不是硬性最低要求；极简 PRD 总数可以很少，复杂 PRD 可按模块提高。
-12. 功能类通常最多，但边界/异常/权限/性能只在适用时生成。不要把“全面”等同于“每模块五类都要有”。
-13. 不要生成测试用例。
-14. 只输出 JSON：
+14. 功能类通常最多，但边界/异常/权限/性能只在适用时生成。不要把“全面”等同于“每模块五类都要有”。
+15. 不要生成测试用例。
+16. 只输出 JSON：
 {
   "documentComplexity": "simple",
   "coverageRationale": "为什么这样估算覆盖范围和数量",
@@ -1004,16 +1116,21 @@ async function generateModulePlan({
       "complexity": "simple",
       "riskLevel": "medium",
       "isCore": true,
+      "designTechniques": ["等价类", "边界值", "状态迁移", "权限矩阵"],
       "testPoints": [
         {
           "id": "TP-01",
           "name": "手机号密码登录",
           "evidence": "PRD 第 5.1 节：已注册用户输入正确手机号和密码后可登录成功",
+          "requirementId": "REQ-5.1",
+          "requirementSection": "5.1 登录",
+          "sourceQuote": "已注册用户输入正确手机号和密码后可登录成功",
           "fields": ["手机号", "密码"],
           "states": ["账号正常", "账号锁定"],
           "roles": ["普通用户"],
           "flows": ["登录提交", "登录结果跳转"],
           "rules": ["手机号必填且格式合法", "密码必填"],
+          "designTechniques": ["等价类", "边界值", "状态迁移", "权限矩阵"],
           "riskLevel": "high",
           "riskFactors": ["核心链路", "登录态", "账号状态", "重复提交"],
           "coverage": {
@@ -1121,6 +1238,7 @@ async function generateCasesForModule({
 模块说明：${module.description ?? "无"}
 模块复杂度：${module.complexity ?? "medium"}
 风险等级：${module.riskLevel ?? "medium"}
+建议测试设计方法：${module.designTechniques?.join("、") || "按测试点指定方法"}
 显式测试点：
 ${module.testPoints.map(formatTestPointForPrompt).join("\n") || "无"}
 风险点：
@@ -1159,12 +1277,14 @@ Excel 导入模板字段要求：
 7. 异常只覆盖接口失败、网络失败、依赖失败、超时、中断、同步失败等有依据的场景。
 8. 权限只覆盖登录态、角色、会员等级、越权、数据隔离、敏感数据等有依据的场景。
 9. 性能只覆盖高频、大数据量、分页、并发、响应时限等有依据的场景。
-10. 不要把多个功能点合并成一个“核心流程”用例。不要只写“成功进入/成功保存”。
-11. title 必须具体到功能点、条件或状态，不要泛化。
-12. steps 写成可执行动作，expectedResult 写可验证结果。
-13. module 字段统一填写：${moduleName}
-14. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
-15. 每条用例必须满足 Excel 模板字段，尤其是 caseType、priority、executionType、maintainer、followers、steps、expectedResults。
+10. 每条用例必须显式标注使用的测试设计方法 designTechniques，只能从 ${designTechniques.join("、")} 中选择；边界字段用边界值，状态流转用状态迁移，角色差异用权限矩阵，规则组合用判定表或组合覆盖，重复提交/补偿用幂等或回滚。
+11. 不要把多个功能点合并成一个“核心流程”用例。不要只写“成功进入/成功保存”。
+12. title 必须具体到功能点、条件或状态，不要泛化。
+13. steps 写成可执行动作，expectedResult 写可验证结果。
+14. module 字段统一填写：${moduleName}
+15. 每条用例必须填写 testPointId、testPoint、evidence、requirementId、requirementSection、sourceQuote，对应上方某个原子测试点。
+16. 每条用例必须填写 fieldsCovered、statesCovered、rulesCovered、riskTags，分别来自测试点字段、状态、规则和风险。
+17. 每条用例必须满足 Excel 模板字段，尤其是 caseType、priority、executionType、maintainer、followers、steps、expectedResults。
 
 逆向功能用例示例方向：
 - 身份/访问类：未登录、无权限、角色不匹配、账号状态异常、授权取消、会话过期、多端冲突。
@@ -1191,9 +1311,17 @@ Excel 导入模板字段要求：
       "estimatedHours": null,
       "remainingHours": null,
       "relatedWorkItems": "",
+      "requirementId": "REQ-5.1",
+      "requirementSection": "5.1 登录",
+      "sourceQuote": "PRD 原文短句",
       "testPointId": "TP-01",
       "testPoint": "对应原子测试点名称",
       "evidence": "PRD 依据",
+      "fieldsCovered": ["手机号", "密码"],
+      "statesCovered": ["账号正常"],
+      "rulesCovered": ["手机号必填且格式合法"],
+      "riskTags": ["核心链路", "登录态"],
+      "designTechniques": ["等价类", "边界值"],
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
       "expectedResults": ["步骤1对应预期", "步骤2对应预期"],
@@ -1288,6 +1416,7 @@ async function generateCoverageRepairCasesForModule({
 模块说明：${module.description ?? "无"}
 模块复杂度：${module.complexity ?? "medium"}
 风险等级：${module.riskLevel ?? "medium"}
+建议测试设计方法：${module.designTechniques?.join("、") || "按测试点指定方法"}
 显式测试点：
 ${module.testPoints.map(formatTestPointForPrompt).join("\n") || "无"}
 风险点：
@@ -1314,8 +1443,9 @@ ${coverageGaps.pointGaps
 4. 不要重复已生成标题，不要写泛化标题。
 5. 每条 steps 必须可执行，expectedResult 必须可验证。
 6. 严格依据 PRD 文本和覆盖蓝图，不要引入无依据的行业假设，不要为了凑数量扩展不存在的功能。
-7. 每条用例必须填写 testPointId、testPoint、evidence，对应上方某个原子测试点。
-8. 每条用例必须满足 Excel 模板字段：maintainer 默认 ${defaultMaintainer}，caseType 只能是 ${caseTypeOptions.join("、")}，priority 只能是 P0/P1/P2，executionType 固定为 ${defaultExecutionType}，estimatedHours/remainingHours 只能是数字或 null，steps 与 expectedResults 数组顺序对齐。
+7. 每条用例必须填写 testPointId、testPoint、evidence、requirementId、requirementSection、sourceQuote，对应上方某个原子测试点。
+8. 每条用例必须填写 fieldsCovered、statesCovered、rulesCovered、riskTags 和 designTechniques；designTechniques 只能从 ${designTechniques.join("、")} 中选择。
+9. 每条用例必须满足 Excel 模板字段：maintainer 默认 ${defaultMaintainer}，caseType 只能是 ${caseTypeOptions.join("、")}，priority 只能是 P0/P1/P2，executionType 固定为 ${defaultExecutionType}，estimatedHours/remainingHours 只能是数字或 null，steps 与 expectedResults 数组顺序对齐。
 
 只输出 JSON：
 {
@@ -1333,9 +1463,17 @@ ${coverageGaps.pointGaps
       "estimatedHours": null,
       "remainingHours": null,
       "relatedWorkItems": "",
+      "requirementId": "REQ-5.1",
+      "requirementSection": "5.1 登录",
+      "sourceQuote": "PRD 原文短句",
       "testPointId": "TP-01",
       "testPoint": "对应原子测试点名称",
       "evidence": "PRD 依据",
+      "fieldsCovered": ["字段"],
+      "statesCovered": ["状态"],
+      "rulesCovered": ["规则"],
+      "riskTags": ["风险"],
+      "designTechniques": ["等价类"],
       "preconditions": "前置条件",
       "steps": ["步骤1", "步骤2"],
       "expectedResults": ["步骤1对应预期", "步骤2对应预期"],
@@ -1368,6 +1506,215 @@ ${context}`,
   };
 }
 
+function mergeCaseQualityFindings(cases: TestCase[], findings: QualityFinding[]) {
+  return cases.map((item) => {
+    const matchedFindings = findings.filter((finding) => {
+      if (finding.caseId && finding.caseId === item.id) return true;
+      if (finding.title && (finding.title === item.title || item.title.includes(finding.title))) return true;
+      return false;
+    });
+    if (!matchedFindings.length) return item;
+    return {
+      ...item,
+      qualityFindings: [...(item.qualityFindings ?? []), ...matchedFindings].slice(0, 8),
+    };
+  });
+}
+
+function summarizeQualityReports(reports: GenerationQualityReport[]): GenerationQualityReport | undefined {
+  if (!reports.length) return undefined;
+  const findings = reports.flatMap((item) => item.findings).slice(0, 80);
+  const averageScore = Math.round(reports.reduce((sum, item) => sum + item.score, 0) / reports.length);
+  const revisedCaseCount = reports.reduce((sum, item) => sum + item.revisedCaseCount, 0);
+  return {
+    score: averageScore,
+    summary: `已完成 ${reports.length} 个模块的独立质量审查，修订 ${revisedCaseCount} 条用例，发现 ${findings.length} 个需关注问题。`,
+    revisedCaseCount,
+    findingCount: findings.length,
+    findings,
+  };
+}
+
+async function reviewAndReviseCasesForModule({
+  apiKey,
+  baseURL,
+  existingCases,
+  model,
+  module,
+  onEvent,
+  provider,
+  reasoningEffort,
+  signal,
+  text,
+  thinkingMode,
+}: {
+  apiKey: string;
+  baseURL?: string;
+  existingCases: TestCase[];
+  model: string;
+  module: ModulePlan;
+  onEvent: (event: StreamEvent) => void;
+  provider: LlmProvider;
+  reasoningEffort: ReasoningEffort;
+  signal?: AbortSignal;
+  text: string;
+  thinkingMode: ThinkingMode;
+}) {
+  const startedAt = Date.now();
+  const moduleName = formatModuleName(module);
+  const context = getRelevantPrdText(text, module);
+  const compactCases = existingCases.map((item) => ({
+    id: item.id,
+    category: item.category,
+    title: item.title,
+    priority: item.priority,
+    testPointId: item.testPointId,
+    testPoint: item.testPoint,
+    evidence: item.evidence,
+    requirementId: item.requirementId,
+    requirementSection: item.requirementSection,
+    sourceQuote: item.sourceQuote,
+    fieldsCovered: item.fieldsCovered,
+    statesCovered: item.statesCovered,
+    rulesCovered: item.rulesCovered,
+    riskTags: item.riskTags,
+    designTechniques: item.designTechniques,
+    preconditions: item.preconditions,
+    steps: item.steps,
+    expectedResults: item.expectedResults,
+    expectedResult: item.expectedResult,
+    remarks: item.remarks,
+  }));
+
+  onEvent({
+    type: "stage",
+    message: "质量检查：审查并修订用例",
+    detail: `${moduleName}：独立检查重复、泛化、可执行性、证据链和步骤预期对齐`,
+  });
+
+  const { payload, rawLength, finishReason, usage } = await streamJsonRequest<QualityReviewResponse>({
+    apiKey,
+    baseURL,
+    model,
+    provider,
+    maxTokens: getProviderMaxTokens(provider, Math.max(3_500, existingCases.length * 650), 14_000),
+    stageLabel: `${moduleName} 质量审查`,
+    onEvent,
+    reasoningEffort,
+    thinkingMode,
+    signal,
+    messages: [
+      {
+        role: "system",
+        content:
+          "你是资深测试负责人和测试用例评审专家。你要审查并修订已生成的测试用例，保持数量基本稳定，但必须消除泛化、重复、不可执行、不可验证和缺少 PRD 依据的问题。只输出严格 JSON object，不要 Markdown。",
+      },
+      {
+        role: "user",
+        content: `当前模块：${moduleName}
+模块说明：${module.description ?? "无"}
+风险等级：${module.riskLevel ?? "medium"}
+覆盖蓝图测试点：
+${module.testPoints.map(formatTestPointForPrompt).join("\n") || "无"}
+
+需要审查的用例 JSON：
+${JSON.stringify(compactCases, null, 2)}
+
+审查规则：
+1. 删除或合并明显重复、标题不同但目的相同的用例；必要时把更高价值内容合并到保留用例。
+2. 重写泛化标题，例如“核心流程”“成功保存”“异常处理”等，必须具体到条件、状态、字段或规则。
+3. steps 必须是测试人员可执行动作，不能只写“验证”“检查”“测试功能”。
+4. expectedResults 必须与 steps 数量和顺序对齐；expectedResult 必须是一句总预期。
+5. 每条用例必须有 PRD 依据：testPointId、testPoint、evidence、requirementSection、sourceQuote 至少要能对应上方测试点。
+6. 每条用例必须保留或补齐 requirementId、requirementSection、sourceQuote、fieldsCovered、statesCovered、rulesCovered、riskTags、designTechniques。
+7. designTechniques 只能从 ${designTechniques.join("、")} 中选择，并要与场景匹配。
+8. 权限、异常、边界、性能类不能写成普通功能 happy path。
+9. 不要引入 PRD 和蓝图没有依据的新功能；发现无法确定的规则，写入 findings。
+10. 返回 cases 必须是修订后的完整用例对象数组，不要只返回差异。
+
+只输出 JSON：
+{
+  "score": 88,
+  "summary": "质量审查摘要",
+  "revisedCaseCount": 3,
+  "findingCount": 2,
+  "findings": [
+    {
+      "severity": "medium",
+      "issueType": "预期不可验证",
+      "caseId": "临时ID",
+      "title": "用例标题",
+      "detail": "问题说明",
+      "suggestion": "修订建议"
+    }
+  ],
+  "cases": [
+    {
+      "id": "原临时ID",
+      "category": "功能",
+      "title": "修订后的具体标题",
+      "priority": "P0",
+      "module": "${moduleName}",
+      "status": "",
+      "maintainer": "${defaultMaintainer}",
+      "caseType": "功能测试",
+      "executionType": "${defaultExecutionType}",
+      "estimatedHours": null,
+      "remainingHours": null,
+      "relatedWorkItems": "",
+      "requirementId": "REQ-5.1",
+      "requirementSection": "5.1 登录",
+      "sourceQuote": "PRD 原文短句",
+      "testPointId": "TP-01",
+      "testPoint": "对应原子测试点名称",
+      "evidence": "PRD 依据",
+      "fieldsCovered": ["字段"],
+      "statesCovered": ["状态"],
+      "rulesCovered": ["规则"],
+      "riskTags": ["风险"],
+      "designTechniques": ["等价类"],
+      "preconditions": "前置条件",
+      "steps": ["步骤1", "步骤2"],
+      "expectedResults": ["步骤1对应预期", "步骤2对应预期"],
+      "expectedResult": "总预期结果",
+      "followers": "${defaultMaintainer}",
+      "remarks": "质量审查后保留"
+    }
+  ]
+}
+
+PRD 相关文本：
+${context}`,
+      },
+    ],
+  });
+
+  const findings = normalizeQualityFindings(payload.findings, 32);
+  const cases = mergeCaseQualityFindings(normalizeCases(payload.cases ?? existingCases, module), findings);
+  const revisedCaseCount = Math.max(0, Math.round(payload.revisedCaseCount ?? 0));
+  const qualityReport: GenerationQualityReport = {
+    score: clamp(Math.round(payload.score ?? 80), 0, 100),
+    summary: payload.summary?.trim() || `${moduleName} 已完成质量审查。`,
+    revisedCaseCount,
+    findingCount: Math.max(findings.length, Math.round(payload.findingCount ?? findings.length)),
+    findings,
+  };
+
+  onEvent({
+    type: "stage",
+    message: "质量审查完成",
+    detail: `${moduleName}：评分 ${qualityReport.score}，修订 ${qualityReport.revisedCaseCount} 条，问题 ${qualityReport.findingCount} 个，收到 ${rawLength.toLocaleString("zh-CN")} 字符${finishReason === "length" ? "，模型触达 token 上限" : ""}`,
+  });
+
+  return {
+    cases,
+    qualityReport,
+    hitTokenLimit: finishReason === "length",
+    durationMs: Date.now() - startedAt,
+    usage,
+  };
+}
+
 export async function POST(request: Request) {
   const encoder = new TextEncoder();
   const generationStartedAt = Date.now();
@@ -1375,6 +1722,7 @@ export async function POST(request: Request) {
   let provider: LlmProvider = "deepseek";
   let model = providerDefaults.deepseek.model;
   let baseURL: string | undefined;
+  let mode: GenerationMode = "cases";
   let thinkingMode: ThinkingMode = "fast";
   let reasoningEffort: ReasoningEffort = "medium";
   let fileName = "未命名 PRD";
@@ -1387,6 +1735,7 @@ export async function POST(request: Request) {
   let resultSource: "ai" | "fallback" = "ai";
   const moduleStats: GenerationModuleStats[] = [];
   const moduleCaseMap = new Map<string, TestCase[]>();
+  const qualityReports: GenerationQualityReport[] = [];
   const warnings: string[] = [];
 
   return new Response(
@@ -1401,7 +1750,11 @@ export async function POST(request: Request) {
         const buildResultWithStats = (status: "success" | "failed" | "cancelled", result: GenerateResponse) => {
           const generationCompletedAt = Date.now();
           const completedIso = new Date(generationCompletedAt).toISOString();
-          const moduleNames = new Set(result.cases.map((item) => item.module));
+          const moduleNames = new Set(
+            result.cases.length
+              ? result.cases.map((item) => item.module)
+              : (result.coverageBlueprint?.modules ?? []).map(formatModuleName),
+          );
           const estimatedCostCny =
             provider === "aliyun"
               ? estimateAliyunCostCny(model, thinkingMode, totalUsage)
@@ -1466,6 +1819,8 @@ export async function POST(request: Request) {
           const baseURLValue = formData.get("baseURL");
           const thinkingModeValue = formData.get("thinkingMode");
           const reasoningEffortValue = formData.get("reasoningEffort");
+          const strategyValue = formData.get("coverageBlueprint");
+          mode = getGenerationMode(formData.get("mode"));
           provider = getProvider(formData.get("provider"));
           const config = providerDefaults[provider];
           const requestApiKey = typeof apiKeyValue === "string" ? apiKeyValue.trim() : "";
@@ -1480,7 +1835,7 @@ export async function POST(request: Request) {
             message: "已读取模型配置",
             detail: `${providerLabels[provider]} / ${model} / ${
               provider === "aliyun" ? (thinkingMode === "quality" ? "高质量模式" : "快速模式") : `推理 ${reasoningEffort}`
-            } / ${apiKey ? "已提供 API Key" : "未提供 API Key"}${provider === "velotric" && baseURL ? ` / 网关 ${baseURL}` : ""}`,
+            } / ${apiKey ? "已提供 API Key" : "未提供 API Key"} / ${mode === "strategy" ? "生成测试策略" : "生成测试用例"}${provider === "velotric" && baseURL ? ` / 网关 ${baseURL}` : ""}`,
           });
 
           if (!(file instanceof File)) {
@@ -1518,26 +1873,50 @@ export async function POST(request: Request) {
 
           let result: GenerateResponse;
           if (apiKey) {
-            const planResult = await generateModulePlan({
-              apiKey,
-              baseURL,
-              fileName: file.name,
-              model,
-              onEvent,
-              provider,
-              reasoningEffort,
-              signal: request.signal,
-              text,
-              thinkingMode,
-            });
-            totalUsage = addUsage(totalUsage, planResult.usage);
-            coverageBlueprint = planResult.blueprint;
+            if (mode === "cases") {
+              coverageBlueprint = parseCoverageBlueprintInput(strategyValue);
+              if (coverageBlueprint) {
+                onEvent({
+                  type: "stage",
+                  message: "使用已确认测试策略",
+                  detail: `收到 ${coverageBlueprint.modules.length} 个模块，计划约 ${coverageBlueprint.plannedCaseCount.toLocaleString("zh-CN")} 条`,
+                });
+              }
+            }
+
+            if (!coverageBlueprint) {
+              const planResult = await generateModulePlan({
+                apiKey,
+                baseURL,
+                fileName: file.name,
+                model,
+                onEvent,
+                provider,
+                reasoningEffort,
+                signal: request.signal,
+                text,
+                thinkingMode,
+              });
+              totalUsage = addUsage(totalUsage, planResult.usage);
+              coverageBlueprint = planResult.blueprint;
+            }
+
             plannedCaseCount = coverageBlueprint.plannedCaseCount;
             const modules = coverageBlueprint.modules;
 
             if (!modules.length) throw new Error("模型未能识别出可测试功能模块。");
 
-            for (let index = 0; index < modules.length; index += 1) {
+            if (mode === "strategy") {
+              result = {
+                source: "ai",
+                fileName: file.name,
+                summary: `已生成可编辑测试策略：识别 ${modules.length} 个模块，计划约 ${coverageBlueprint.plannedCaseCount} 条用例。请确认模块、测试点、风险等级、设计方法和类型配比后继续生成。`,
+                cases: [],
+                warnings: ["当前仅生成测试策略，确认后再开始生成测试用例。"],
+                coverageBlueprint,
+              };
+            } else {
+              for (let index = 0; index < modules.length; index += 1) {
               assertNotAborted(request.signal);
               const currentModule = modules[index];
               const moduleName = formatModuleName(currentModule);
@@ -1587,6 +1966,33 @@ export async function POST(request: Request) {
                 if (repair.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 覆盖补充达到 token 上限，已尽力解析。`);
               }
 
+              try {
+                assertNotAborted(request.signal);
+                const qualityReview = await reviewAndReviseCasesForModule({
+                  apiKey,
+                  baseURL,
+                  existingCases: moduleCases,
+                  model,
+                  module: currentModule,
+                  onEvent,
+                  provider,
+                  reasoningEffort,
+                  signal: request.signal,
+                  text,
+                  thinkingMode,
+                });
+                moduleCases = qualityReview.cases;
+                moduleCaseMap.set(moduleName, moduleCases);
+                moduleUsage = addUsage(moduleUsage, qualityReview.usage);
+                moduleDurationMs += qualityReview.durationMs;
+                totalUsage = addUsage(totalUsage, qualityReview.usage);
+                qualityReports.push(qualityReview.qualityReport);
+                if (qualityReview.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 质量审查达到 token 上限，已尽力解析。`);
+              } catch (qualityError) {
+                if (isCancelledError(qualityError)) throw qualityError;
+                warnings.push(`${formatModuleName(currentModule)} 质量审查未完成：${getErrorMessage(qualityError)}`);
+              }
+
               moduleStats.push({
                 name: moduleName,
                 caseCount: moduleCases.length,
@@ -1596,6 +2002,7 @@ export async function POST(request: Request) {
             }
 
             const cases = dedupeAndRenumber([...moduleCaseMap.values()].flat());
+            const qualityReport = summarizeQualityReports(qualityReports);
             result = {
               source: "ai",
               fileName: file.name,
@@ -1603,7 +2010,9 @@ export async function POST(request: Request) {
               cases,
               warnings,
               coverageBlueprint,
+              ...(qualityReport ? { qualityReport } : {}),
             };
+            }
           } else {
             resultSource = "fallback";
             onEvent({
@@ -1616,36 +2025,41 @@ export async function POST(request: Request) {
 
           result = buildResultWithStats("success", result);
 
-          try {
-            const savedRecord = saveRunHistoryRecord({
-              status: "success",
-              createdAt: generationStartedIso,
-              completedAt: result.stats?.completedAt,
-              provider,
-              model,
-              ...(provider === "aliyun" ? { thinkingMode } : {}),
-              result,
-            });
-            result = {
-              ...result,
-              historyId: savedRecord.id,
-            };
-            onEvent({
-              type: "stage",
-              message: "运行记录已保存",
-              detail: `SQLite 持久化记录：${savedRecord.id}`,
-            });
-          } catch (saveError) {
-            result = {
-              ...result,
-              warnings: [...result.warnings, `运行记录保存失败：${getErrorMessage(saveError)}`],
-            };
+          if (mode !== "strategy") {
+            try {
+              const savedRecord = saveRunHistoryRecord({
+                status: "success",
+                createdAt: generationStartedIso,
+                completedAt: result.stats?.completedAt,
+                provider,
+                model,
+                ...(provider === "aliyun" ? { thinkingMode } : {}),
+                result,
+              });
+              result = {
+                ...result,
+                historyId: savedRecord.id,
+              };
+              onEvent({
+                type: "stage",
+                message: "运行记录已保存",
+                detail: `SQLite 持久化记录：${savedRecord.id}`,
+              });
+            } catch (saveError) {
+              result = {
+                ...result,
+                warnings: [...result.warnings, `运行记录保存失败：${getErrorMessage(saveError)}`],
+              };
+            }
           }
 
           onEvent({
             type: "stage",
-            message: "阶段 3：合并并统计结果",
-            detail: `识别 ${new Set(result.cases.map((item) => item.module)).size} 个模块，生成 ${result.cases.length} 条用例`,
+            message: mode === "strategy" ? "测试策略已生成" : "阶段 3：合并并统计结果",
+            detail:
+              mode === "strategy"
+                ? `识别 ${result.coverageBlueprint?.modules.length ?? 0} 个模块，等待确认后生成用例`
+                : `识别 ${new Set(result.cases.map((item) => item.module)).size} 个模块，生成 ${result.cases.length} 条用例`,
           });
           onEvent({ type: "result", data: result });
           onEvent({ type: "done" });

@@ -71,6 +71,14 @@ export function buildTemplateRemarks(item: TestCase) {
     `测试分类：${item.category}`,
     item.testPoint ? `测试点：${item.testPoint}` : "",
     item.evidence ? `PRD依据：${item.evidence}` : "",
+    item.requirementId ? `需求编号：${item.requirementId}` : "",
+    item.requirementSection ? `需求章节：${item.requirementSection}` : "",
+    item.sourceQuote ? `原文证据：${item.sourceQuote}` : "",
+    item.designTechniques?.length ? `设计方法：${item.designTechniques.join("、")}` : "",
+    item.fieldsCovered?.length ? `覆盖字段：${item.fieldsCovered.join("、")}` : "",
+    item.statesCovered?.length ? `覆盖状态：${item.statesCovered.join("、")}` : "",
+    item.rulesCovered?.length ? `覆盖规则：${item.rulesCovered.join("、")}` : "",
+    item.riskTags?.length ? `风险标签：${item.riskTags.join("、")}` : "",
   ].filter(Boolean);
 
   return parts.join("\n");

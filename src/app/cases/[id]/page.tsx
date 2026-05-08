@@ -71,8 +71,16 @@ function getCaseSearchText(item: TestCase) {
     item.title,
     item.module,
     item.priority,
+    item.requirementId,
+    item.requirementSection,
+    item.sourceQuote,
     item.testPoint,
     item.evidence,
+    ...(item.fieldsCovered ?? []),
+    ...(item.statesCovered ?? []),
+    ...(item.rulesCovered ?? []),
+    ...(item.riskTags ?? []),
+    ...(item.designTechniques ?? []),
     item.preconditions,
     item.expectedResult,
     template.caseType,
@@ -95,6 +103,105 @@ function groupCases(cases: TestCase[]) {
     else data.set(item.module, [item]);
   }
   return [...data.entries()].map(([moduleName, items]) => ({ moduleName, cases: items }));
+}
+
+function uniqueValues(values: Array<string | undefined>) {
+  return [...new Set(values.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+}
+
+function buildTraceabilityRows(cases: TestCase[]) {
+  const groups = new Map<string, TestCase[]>();
+  for (const item of cases) {
+    const key = [item.requirementId, item.requirementSection, item.testPointId, item.testPoint, item.evidence].filter(Boolean).join("::") || `${item.module}::${item.title}`;
+    groups.set(key, [...(groups.get(key) ?? []), item]);
+  }
+
+  return [...groups.entries()].map(([key, items]) => ({
+    key,
+    requirementId: uniqueValues(items.map((item) => item.requirementId)).join("、"),
+    requirementSection: uniqueValues(items.map((item) => item.requirementSection)).join("、"),
+    testPoint: uniqueValues(items.map((item) => item.testPoint)).join("、"),
+    evidence: uniqueValues(items.map((item) => item.sourceQuote || item.evidence)).slice(0, 2).join("；"),
+    categories: uniqueValues(items.map((item) => item.category)),
+    techniques: uniqueValues(items.flatMap((item) => item.designTechniques ?? [])),
+    risks: uniqueValues(items.flatMap((item) => item.riskTags ?? [])),
+    cases: items,
+  }));
+}
+
+function TraceabilityMatrixPanel({ cases }: { cases: TestCase[] }) {
+  const rows = useMemo(() => buildTraceabilityRows(cases), [cases]);
+  const hasTraceSignals = cases.some((item) => item.requirementId || item.requirementSection || item.sourceQuote || item.testPointId || item.testPoint || item.evidence);
+  if (!hasTraceSignals) return null;
+  if (!rows.length) return null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <ListChecks className="size-4" />
+            追溯矩阵
+          </div>
+          <h2 className="mt-1 text-lg font-semibold tracking-normal">需求条款到测试用例</h2>
+        </div>
+        <span className="self-start rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
+          {rows.length} 条链路
+        </span>
+      </div>
+      <div className="mt-4 overflow-x-auto">
+        <table className="min-w-[980px] border-separate border-spacing-0 text-left text-sm">
+          <thead>
+            <tr className="text-xs font-medium text-slate-500">
+              {["需求条款", "测试点", "覆盖", "设计方法", "风险", "用例"].map((header) => (
+                <th key={header} className="border-b border-slate-200 bg-slate-50 px-3 py-2 first:rounded-l-lg last:rounded-r-lg">
+                  {header}
+                </th>
+              ))}
+            </tr>
+          </thead>
+          <tbody>
+            {rows.slice(0, 30).map((row) => (
+              <tr key={row.key} className="align-top">
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <p className="font-medium text-slate-800">{row.requirementId || row.requirementSection || "未标注编号"}</p>
+                  {row.requirementId && row.requirementSection ? <p className="mt-1 text-xs text-slate-500">{row.requirementSection}</p> : null}
+                  {row.evidence ? <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-400">{row.evidence}</p> : null}
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3 text-slate-700">{row.testPoint || "未标注测试点"}</td>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {row.categories.map((category) => (
+                      <span key={category} className={clsx("rounded-full px-2 py-0.5 text-xs ring-1", categoryStyles[category as TestCategory])}>
+                        {category}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <div className="flex flex-wrap gap-1.5">
+                    {row.techniques.map((technique) => (
+                      <span key={technique} className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+                        {technique}
+                      </span>
+                    ))}
+                  </div>
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <p className="line-clamp-3 text-xs leading-5 text-slate-500">{row.risks.join("、") || "未标注"}</p>
+                </td>
+                <td className="border-b border-slate-100 px-3 py-3">
+                  <p className="font-semibold text-slate-800">{row.cases.length} 条</p>
+                  <p className="mt-1 line-clamp-2 text-xs leading-5 text-slate-500">{row.cases.slice(0, 3).map((item) => item.id).join("、")}</p>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      {rows.length > 30 ? <p className="mt-3 text-xs text-slate-400">仅展示前 30 条链路，可通过搜索和模块筛选收敛范围。</p> : null}
+    </section>
+  );
 }
 
 function PaginationControls({
@@ -204,6 +311,25 @@ function CaseDetailCard({ item }: { item: TestCase }) {
               {item.evidence ? `依据：${item.evidence}` : ""}
             </p>
           ) : null}
+          {item.requirementSection || item.requirementId || item.sourceQuote ? (
+            <p className="mt-1 break-words text-xs leading-5 text-slate-400">
+              {[item.requirementSection ? `章节：${item.requirementSection}` : "", item.requirementId ? `需求：${item.requirementId}` : "", item.sourceQuote ? `原文：${item.sourceQuote}` : ""].filter(Boolean).join(" ｜ ")}
+            </p>
+          ) : null}
+          {(item.designTechniques?.length || item.riskTags?.length) ? (
+            <div className="mt-3 flex flex-wrap gap-2">
+              {(item.designTechniques ?? []).map((technique) => (
+                <span key={technique} className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+                  {technique}
+                </span>
+              ))}
+              {(item.riskTags ?? []).slice(0, 5).map((tag) => (
+                <span key={tag} className="rounded-full bg-slate-50 px-2 py-0.5 text-xs text-slate-600 ring-1 ring-slate-200">
+                  {tag}
+                </span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -245,6 +371,18 @@ function CaseDetailCard({ item }: { item: TestCase }) {
         <div className="mt-4 rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">备注</p>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{template.remarks}</p>
+        </div>
+      ) : null}
+      {item.qualityFindings?.length ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs font-medium uppercase text-amber-700">质量审查</p>
+          <div className="mt-2 space-y-2">
+            {item.qualityFindings.map((finding, index) => (
+              <p key={`${finding.issueType}-${index}`} className="text-sm leading-6 text-amber-800">
+                {finding.issueType}：{finding.detail}
+              </p>
+            ))}
+          </div>
         </div>
       ) : null}
     </article>
@@ -517,6 +655,8 @@ export default function CaseDetailPage() {
                   </span>
                 </div>
               </div>
+
+              <TraceabilityMatrixPanel cases={result.cases} />
 
               <div className="rounded-lg border border-slate-200 bg-white p-3 shadow-sm">
                 <div className="flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">

@@ -16,17 +16,21 @@ import {
   KeyRound,
   ListChecks,
   Loader2,
+  Lock,
   Minimize2,
   Monitor,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   PlayCircle,
+  Plus,
   Settings,
   Sparkles,
   Square,
   Sun,
   Terminal,
+  Trash2,
+  Unlock,
   UploadCloud,
   X,
   Zap,
@@ -61,15 +65,20 @@ import type {
   AgentAnalysisItem,
   AgentAnalysisResponse,
   Complexity,
+  CoverageBlueprint,
   CoverageModule,
   GenerateResponse,
   RiskLevel,
   TestAgentAnalysisType,
   TestAgentType,
   TestCategory,
+  TestDesignTechnique,
 } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
+const designTechniqueOptions: TestDesignTechnique[] = ["等价类", "边界值", "判定表", "状态迁移", "流程分支", "权限矩阵", "组合覆盖", "接口契约", "幂等", "并发", "回滚"];
+const complexityOptions: Complexity[] = ["minimal", "simple", "medium", "complex", "large"];
+const riskOptions: RiskLevel[] = ["low", "medium", "high", "critical"];
 const analysisFileAccept = ".pdf,.txt,.log,.md,.json,.jsonl,.csv,.tsv,.yaml,.yml,.xml,.har,.diff,.patch,.sql,.proto,.ts,.tsx,.js,.jsx,.java,.kt,.py,.go,.swift,.c,.cpp,.h";
 
 const categoryStyles: Record<TestCategory, string> = {
@@ -712,6 +721,440 @@ function formatCoverageModuleName(module: CoverageModule) {
   return `${module.parent} / ${module.name}`;
 }
 
+function clampStrategyCount(value: number) {
+  return Math.min(160, Math.max(0, Math.round(Number.isFinite(value) ? value : 0)));
+}
+
+function readCount(value: string) {
+  const parsed = Number.parseInt(value, 10);
+  return clampStrategyCount(Number.isFinite(parsed) ? parsed : 0);
+}
+
+function sumCoverageTargets(targets: Partial<Record<TestCategory, number>> | undefined) {
+  return categories.reduce((sum, category) => sum + clampStrategyCount(targets?.[category] ?? 0), 0);
+}
+
+function normalizeStrategyModule(module: CoverageModule): CoverageModule {
+  const targetCaseCount = Math.max(1, sumCoverageTargets(module.categoryTargets) || module.targetCaseCount || module.testPoints.reduce((sum, point) => sum + (point.expectedCaseCount || sumCoverageTargets(point.coverage)), 0));
+  return {
+    ...module,
+    targetCaseCount,
+    categoryTargets: Object.fromEntries(categories.map((category) => [category, clampStrategyCount(module.categoryTargets?.[category] ?? 0)])) as Record<TestCategory, number>,
+    designTechniques: module.designTechniques ?? [],
+    testPoints: module.testPoints.map((point) => ({
+      ...point,
+      expectedCaseCount: Math.max(1, point.expectedCaseCount || sumCoverageTargets(point.coverage)),
+      coverage: Object.fromEntries(categories.map((category) => [category, clampStrategyCount(point.coverage?.[category] ?? 0)])) as Record<TestCategory, number>,
+      designTechniques: point.designTechniques ?? [],
+    })),
+  };
+}
+
+function recalculateStrategy(blueprint: CoverageBlueprint): CoverageBlueprint {
+  const modules = blueprint.modules.map(normalizeStrategyModule);
+  return {
+    ...blueprint,
+    modules,
+    plannedCaseCount: modules.reduce((sum, module) => sum + module.targetCaseCount, 0),
+  };
+}
+
+function toggleTechnique(current: TestDesignTechnique[] | undefined, technique: TestDesignTechnique) {
+  const source = current ?? [];
+  return source.includes(technique) ? source.filter((item) => item !== technique) : [...source, technique];
+}
+
+function buildNewTestPoint(index: number): CoverageModule["testPoints"][number] {
+  return {
+    id: `TP-NEW-${String(index + 1).padStart(2, "0")}`,
+    name: "新测试点",
+    evidence: "待补充 PRD 依据",
+    requirementId: "",
+    requirementSection: "",
+    sourceQuote: "",
+    fields: [],
+    states: [],
+    roles: [],
+    flows: [],
+    rules: [],
+    designTechniques: ["等价类"],
+    riskLevel: "medium",
+    riskFactors: [],
+    coverage: { 功能: 1 },
+    expectedCaseCount: 1,
+  };
+}
+
+function buildNewModule(index: number): CoverageModule {
+  return {
+    name: `新模块 ${index + 1}`,
+    description: "待补充模块职责",
+    complexity: "simple",
+    riskLevel: "medium",
+    isCore: false,
+    testPoints: [buildNewTestPoint(0)],
+    riskPoints: [],
+    designTechniques: ["等价类"],
+    categoryTargets: { 功能: 1 },
+    skippedCategories: [],
+    coverageNotes: [],
+    targetCaseCount: 1,
+  };
+}
+
+function StrategyEditorPanel({
+  disabled,
+  fileName,
+  strategy,
+  onChange,
+  onClear,
+  onGenerate,
+  onRegenerate,
+}: {
+  disabled: boolean;
+  fileName?: string;
+  strategy: CoverageBlueprint | null;
+  onChange: (strategy: CoverageBlueprint) => void;
+  onClear: () => void;
+  onGenerate: () => void;
+  onRegenerate: () => void;
+}) {
+  if (!strategy) return null;
+
+  const updateStrategy = (updater: (current: CoverageBlueprint) => CoverageBlueprint) => {
+    onChange(recalculateStrategy(updater(strategy)));
+  };
+  const updateModule = (moduleIndex: number, updater: (module: CoverageModule) => CoverageModule) => {
+    updateStrategy((current) => ({
+      ...current,
+      modules: current.modules.map((module, index) => (index === moduleIndex ? updater(module) : module)),
+    }));
+  };
+  const updatePoint = (moduleIndex: number, pointIndex: number, updater: (point: CoverageModule["testPoints"][number]) => CoverageModule["testPoints"][number]) => {
+    updateModule(moduleIndex, (module) => {
+      const testPoints = module.testPoints.map((point, index) => (index === pointIndex ? updater(point) : point));
+      const categoryTargets = Object.fromEntries(categories.map((category) => [category, testPoints.reduce((sum, point) => sum + clampStrategyCount(point.coverage?.[category] ?? 0), 0)])) as Record<TestCategory, number>;
+      return { ...module, testPoints, categoryTargets, targetCaseCount: sumCoverageTargets(categoryTargets) };
+    });
+  };
+
+  return (
+    <section className="rounded-lg border border-teal-200 bg-white p-5 shadow-sm">
+      <div className="flex flex-col gap-3 xl:flex-row xl:items-start xl:justify-between">
+        <div className="min-w-0">
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <ListChecks className="size-4" />
+            可编辑测试策略
+          </div>
+          <h2 className="mt-2 text-xl font-semibold tracking-normal">
+            {complexityLabels[strategy.documentComplexity]} PRD · 计划 {strategy.plannedCaseCount} 条
+          </h2>
+          <p className="mt-1 break-words text-sm leading-6 text-slate-500">{fileName ? `${fileName} · ` : ""}{strategy.coverageRationale}</p>
+        </div>
+        <div className="flex flex-wrap gap-2">
+          <button
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
+            disabled={disabled}
+            type="button"
+            onClick={onRegenerate}
+          >
+            <Sparkles className="size-4" />
+            重新生成策略
+          </button>
+          <button
+            className="inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-teal-700 px-3 text-sm font-semibold text-white shadow-sm transition hover:bg-teal-800 disabled:cursor-not-allowed disabled:bg-slate-300"
+            disabled={disabled || !strategy.modules.length}
+            type="button"
+            onClick={onGenerate}
+          >
+            <PlayCircle className="size-4" />
+            按策略生成
+          </button>
+          <button
+            aria-label="清空测试策略"
+            className="grid size-10 place-items-center rounded-lg text-slate-500 transition hover:bg-slate-100 hover:text-slate-900"
+            disabled={disabled}
+            title="清空策略"
+            type="button"
+            onClick={onClear}
+          >
+            <X className="size-4" />
+          </button>
+        </div>
+      </div>
+
+      <div className="mt-4 flex flex-wrap gap-2 text-xs">
+        <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">{strategy.modules.length} 个模块</span>
+        <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">确认后生成用例</span>
+      </div>
+
+      <div className="mt-5 space-y-4">
+        {strategy.modules.map((module, moduleIndex) => {
+          const moduleName = formatCoverageModuleName(module);
+          return (
+            <details key={`${moduleName}-${moduleIndex}`} className="rounded-lg border border-slate-200 bg-slate-50 p-4" open={moduleIndex === 0}>
+              <summary className="flex cursor-pointer list-none flex-wrap items-center justify-between gap-3">
+                <div className="min-w-0">
+                  <p className="break-words font-semibold text-slate-900">{moduleName}</p>
+                  <p className="mt-1 text-sm text-slate-500">
+                    {complexityLabels[module.complexity]} · {riskLabels[module.riskLevel]} · {module.testPoints.length} 个测试点 · {module.targetCaseCount} 条
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  {categories.map((category) => {
+                    const count = module.categoryTargets?.[category] ?? 0;
+                    if (!count) return null;
+                    return (
+                      <span key={category} className={clsx("rounded-full px-2 py-0.5 text-xs ring-1", categoryStyles[category])}>
+                        {category} {count}
+                      </span>
+                    );
+                  })}
+                  {module.locked ? <Lock className="size-4 text-teal-700" /> : null}
+                </div>
+              </summary>
+
+              <div className="mt-4 grid gap-3 lg:grid-cols-2">
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">模块名称</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
+                    value={module.name}
+                    onChange={(event) => updateModule(moduleIndex, (item) => ({ ...item, name: event.target.value }))}
+                  />
+                </label>
+                <label className="block">
+                  <span className="text-xs font-medium text-slate-500">父级模块</span>
+                  <input
+                    className="mt-1 h-10 w-full rounded-lg border border-slate-200 bg-white px-3 text-sm outline-none transition focus:border-teal-500"
+                    value={module.parent ?? ""}
+                    onChange={(event) => updateModule(moduleIndex, (item) => ({ ...item, parent: event.target.value }))}
+                  />
+                </label>
+                <label className="block lg:col-span-2">
+                  <span className="text-xs font-medium text-slate-500">模块职责</span>
+                  <textarea
+                    className="mt-1 min-h-20 w-full rounded-lg border border-slate-200 bg-white px-3 py-2 text-sm leading-6 outline-none transition focus:border-teal-500"
+                    value={module.description ?? ""}
+                    onChange={(event) => updateModule(moduleIndex, (item) => ({ ...item, description: event.target.value }))}
+                  />
+                </label>
+              </div>
+
+              <div className="mt-3 grid gap-3 lg:grid-cols-[1fr_1fr_auto]">
+                <div>
+                  <p className="text-xs font-medium text-slate-500">复杂度</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {complexityOptions.map((option) => (
+                      <button
+                        key={option}
+                        className={clsx("h-8 rounded-md px-2.5 text-xs font-medium ring-1 transition", module.complexity === option ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-600 ring-slate-200 hover:bg-teal-50 hover:text-teal-800")}
+                        type="button"
+                        onClick={() => updateModule(moduleIndex, (item) => ({ ...item, complexity: option }))}
+                      >
+                        {complexityLabels[option]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div>
+                  <p className="text-xs font-medium text-slate-500">风险等级</p>
+                  <div className="mt-1 flex flex-wrap gap-1.5">
+                    {riskOptions.map((option) => (
+                      <button
+                        key={option}
+                        className={clsx("h-8 rounded-md px-2.5 text-xs font-medium ring-1 transition", module.riskLevel === option ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-600 ring-slate-200 hover:bg-teal-50 hover:text-teal-800")}
+                        type="button"
+                        onClick={() => updateModule(moduleIndex, (item) => ({ ...item, riskLevel: option }))}
+                      >
+                        {riskLabels[option]}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+                <div className="flex items-end gap-2">
+                  <button
+                    className={clsx("grid size-9 place-items-center rounded-lg ring-1 transition", module.locked ? "bg-teal-50 text-teal-700 ring-teal-200" : "bg-white text-slate-500 ring-slate-200 hover:bg-slate-50")}
+                    title={module.locked ? "已锁定" : "未锁定"}
+                    type="button"
+                    onClick={() => updateModule(moduleIndex, (item) => ({ ...item, locked: !item.locked }))}
+                  >
+                    {module.locked ? <Lock className="size-4" /> : <Unlock className="size-4" />}
+                  </button>
+                  <button
+                    aria-label={`删除 ${moduleName}`}
+                    className="grid size-9 place-items-center rounded-lg bg-white text-rose-500 ring-1 ring-rose-100 transition hover:bg-rose-50"
+                    type="button"
+                    onClick={() => updateStrategy((current) => ({ ...current, modules: current.modules.filter((_, index) => index !== moduleIndex) }))}
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+              </div>
+
+              <div className="mt-3">
+                <p className="text-xs font-medium text-slate-500">测试设计方法</p>
+                <div className="mt-1 flex flex-wrap gap-1.5">
+                  {designTechniqueOptions.map((technique) => (
+                    <button
+                      key={technique}
+                      className={clsx("h-8 rounded-md px-2.5 text-xs font-medium ring-1 transition", module.designTechniques?.includes(technique) ? "bg-teal-700 text-white ring-teal-700" : "bg-white text-slate-600 ring-slate-200 hover:bg-teal-50 hover:text-teal-800")}
+                      type="button"
+                      onClick={() => updateModule(moduleIndex, (item) => ({ ...item, designTechniques: toggleTechnique(item.designTechniques, technique) }))}
+                    >
+                      {technique}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div className="mt-3 grid gap-2 sm:grid-cols-5">
+                {categories.map((category) => (
+                  <label key={category} className="block rounded-lg bg-white p-2 ring-1 ring-slate-200">
+                    <span className="text-xs font-medium text-slate-500">{category}</span>
+                    <input
+                      className="mt-1 h-9 w-full rounded-md border border-slate-200 px-2 text-sm outline-none focus:border-teal-500"
+                      min={0}
+                      type="number"
+                      value={module.categoryTargets?.[category] ?? 0}
+                      onChange={(event) =>
+                        updateModule(moduleIndex, (item) => {
+                          const categoryTargets = { ...item.categoryTargets, [category]: readCount(event.target.value) };
+                          return { ...item, categoryTargets, targetCaseCount: Math.max(1, sumCoverageTargets(categoryTargets)) };
+                        })
+                      }
+                    />
+                  </label>
+                ))}
+              </div>
+
+              <div className="mt-4 space-y-3">
+                {module.testPoints.map((point, pointIndex) => (
+                  <div key={`${point.id}-${pointIndex}`} className="rounded-lg border border-slate-200 bg-white p-3">
+                    <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                      <div className="grid min-w-0 flex-1 gap-3 lg:grid-cols-2">
+                        <label className="block">
+                          <span className="text-xs font-medium text-slate-500">测试点</span>
+                          <input
+                            className="mt-1 h-9 w-full rounded-md border border-slate-200 px-2 text-sm outline-none focus:border-teal-500"
+                            value={point.name}
+                            onChange={(event) => updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, name: event.target.value }))}
+                          />
+                        </label>
+                        <label className="block">
+                          <span className="text-xs font-medium text-slate-500">章节 / 需求编号</span>
+                          <input
+                            className="mt-1 h-9 w-full rounded-md border border-slate-200 px-2 text-sm outline-none focus:border-teal-500"
+                            value={[point.requirementSection, point.requirementId].filter(Boolean).join(" / ")}
+                            onChange={(event) => {
+                              const [section = "", requirementId = ""] = event.target.value.split("/").map((item) => item.trim());
+                              updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, requirementSection: section, requirementId }));
+                            }}
+                          />
+                        </label>
+                        <label className="block lg:col-span-2">
+                          <span className="text-xs font-medium text-slate-500">PRD 依据</span>
+                          <textarea
+                            className="mt-1 min-h-16 w-full rounded-md border border-slate-200 px-2 py-2 text-sm leading-6 outline-none focus:border-teal-500"
+                            value={point.evidence}
+                            onChange={(event) => updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, evidence: event.target.value, sourceQuote: item.sourceQuote || event.target.value }))}
+                          />
+                        </label>
+                      </div>
+                      <div className="flex gap-2">
+                        <button
+                          className={clsx("grid size-9 place-items-center rounded-lg ring-1 transition", point.locked ? "bg-teal-50 text-teal-700 ring-teal-200" : "bg-slate-50 text-slate-500 ring-slate-200 hover:bg-slate-100")}
+                          title={point.locked ? "已锁定" : "未锁定"}
+                          type="button"
+                          onClick={() => updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, locked: !item.locked }))}
+                        >
+                          {point.locked ? <Lock className="size-4" /> : <Unlock className="size-4" />}
+                        </button>
+                        <button
+                          aria-label={`删除 ${point.name}`}
+                          className="grid size-9 place-items-center rounded-lg bg-rose-50 text-rose-600 ring-1 ring-rose-100 transition hover:bg-rose-100"
+                          type="button"
+                          onClick={() => updateModule(moduleIndex, (item) => ({ ...item, testPoints: item.testPoints.filter((_, index) => index !== pointIndex) }))}
+                        >
+                          <Trash2 className="size-4" />
+                        </button>
+                      </div>
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {riskOptions.map((option) => (
+                        <button
+                          key={option}
+                          className={clsx("h-7 rounded-md px-2 text-xs ring-1 transition", point.riskLevel === option ? "bg-slate-950 text-white ring-slate-950" : "bg-slate-50 text-slate-600 ring-slate-200 hover:bg-teal-50")}
+                          type="button"
+                          onClick={() => updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, riskLevel: option }))}
+                        >
+                          {riskLabels[option]}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 flex flex-wrap gap-1.5">
+                      {designTechniqueOptions.map((technique) => (
+                        <button
+                          key={technique}
+                          className={clsx("h-7 rounded-md px-2 text-xs ring-1 transition", point.designTechniques?.includes(technique) ? "bg-teal-700 text-white ring-teal-700" : "bg-slate-50 text-slate-600 ring-slate-200 hover:bg-teal-50")}
+                          type="button"
+                          onClick={() => updatePoint(moduleIndex, pointIndex, (item) => ({ ...item, designTechniques: toggleTechnique(item.designTechniques, technique) }))}
+                        >
+                          {technique}
+                        </button>
+                      ))}
+                    </div>
+
+                    <div className="mt-3 grid gap-2 sm:grid-cols-5">
+                      {categories.map((category) => (
+                        <label key={category} className="block rounded-lg bg-slate-50 p-2 ring-1 ring-slate-200">
+                          <span className="text-xs font-medium text-slate-500">{category}</span>
+                          <input
+                            className="mt-1 h-8 w-full rounded-md border border-slate-200 px-2 text-sm outline-none focus:border-teal-500"
+                            min={0}
+                            type="number"
+                            value={point.coverage?.[category] ?? 0}
+                            onChange={(event) =>
+                              updatePoint(moduleIndex, pointIndex, (item) => {
+                                const coverage = { ...item.coverage, [category]: readCount(event.target.value) };
+                                return { ...item, coverage, expectedCaseCount: Math.max(1, sumCoverageTargets(coverage)) };
+                              })
+                            }
+                          />
+                        </label>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+
+              <button
+                className="mt-3 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-800"
+                type="button"
+                onClick={() => updateModule(moduleIndex, (item) => ({ ...item, testPoints: [...item.testPoints, buildNewTestPoint(item.testPoints.length)] }))}
+              >
+                <Plus className="size-4" />
+                添加测试点
+              </button>
+            </details>
+          );
+        })}
+      </div>
+
+      <button
+        className="mt-4 inline-flex h-10 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-teal-50 hover:text-teal-800"
+        type="button"
+        onClick={() => updateStrategy((current) => ({ ...current, modules: [...current.modules, buildNewModule(current.modules.length)] }))}
+      >
+        <Plus className="size-4" />
+        添加模块
+      </button>
+    </section>
+  );
+}
+
 function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string; result: GenerateResponse | null }) {
   const blueprint = result?.coverageBlueprint;
   if (!blueprint) return null;
@@ -760,12 +1203,22 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
                 </div>
               </summary>
 
-              {module.coverageNotes.length || module.skippedCategories.length ? (
+              {module.designTechniques?.length ? (
+                <div className="mt-3 flex flex-wrap gap-2">
+                  {module.designTechniques.map((technique) => (
+                    <span key={technique} className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+                      {technique}
+                    </span>
+                  ))}
+                </div>
+              ) : null}
+
+              {(module.coverageNotes?.length ?? 0) || (module.skippedCategories?.length ?? 0) ? (
                 <div className="mt-3 space-y-1 text-sm leading-6 text-slate-500">
-                  {module.coverageNotes.map((note) => (
+                  {(module.coverageNotes ?? []).map((note) => (
                     <p key={note}>{note}</p>
                   ))}
-                  {module.skippedCategories.map((note) => (
+                  {(module.skippedCategories ?? []).map((note) => (
                     <p key={note}>{note}</p>
                   ))}
                 </div>
@@ -778,12 +1231,22 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
                       <div className="min-w-0">
                         <p className="font-medium text-slate-800">{point.name}</p>
                         <p className="mt-1 text-sm leading-6 text-slate-500">{point.evidence}</p>
+                        {point.requirementSection || point.requirementId || point.sourceQuote ? (
+                          <p className="mt-1 text-xs leading-5 text-slate-400">
+                            {[point.requirementSection ? `章节：${point.requirementSection}` : "", point.requirementId ? `需求：${point.requirementId}` : "", point.sourceQuote ? `原文：${point.sourceQuote}` : ""].filter(Boolean).join(" ｜ ")}
+                          </p>
+                        ) : null}
                       </div>
                       <span className="shrink-0 rounded-full bg-slate-50 px-2.5 py-1 text-xs font-medium text-slate-600 ring-1 ring-slate-200">
                         {riskLabels[point.riskLevel]} · {point.expectedCaseCount} 条
                       </span>
                     </div>
                     <div className="mt-2 flex flex-wrap gap-2">
+                      {(point.designTechniques ?? []).map((technique) => (
+                        <span key={technique} className="rounded-full bg-teal-50 px-2 py-0.5 text-xs font-medium text-teal-700 ring-1 ring-teal-200">
+                          {technique}
+                        </span>
+                      ))}
                       {categories.map((category) => {
                         const count = point.coverage[category] ?? 0;
                         if (!count) return null;
@@ -1310,6 +1773,7 @@ export default function Home() {
   const [file, setFile] = useState<File | null>(null);
   const [reviewFile, setReviewFile] = useState<File | null>(null);
   const [result, setResult] = useState<GenerateResponse | null>(null);
+  const [strategyDraft, setStrategyDraft] = useState<CoverageBlueprint | null>(null);
   const [activeModule, setActiveModule] = useState("全部");
   const [isDragging, setIsDragging] = useState(false);
   const [isReviewDragging, setIsReviewDragging] = useState(false);
@@ -1389,6 +1853,7 @@ export default function Home() {
     if (!nextFile) return;
     setError("");
     setResult(null);
+    setStrategyDraft(null);
     setActiveModule("全部");
     setFile(nextFile);
   }
@@ -1636,6 +2101,7 @@ export default function Home() {
   function loadDemoCase() {
     setError("");
     setFile(null);
+    setStrategyDraft(null);
     writeCurrentCaseReport(demoGenerateResponse);
     setResult(demoGenerateResponse);
     setActiveModule("全部");
@@ -1665,48 +2131,10 @@ export default function Home() {
     }
   }
 
-  async function generate() {
-    if (isLoading) {
-      setProgressOpen(true);
-      return;
-    }
-
-    if (!isClientReady) {
-      setError("正在读取本机保存的模型配置，请稍后再试。");
-      return;
-    }
-
-    if (!file) {
-      setError("请选择 PRD PDF。");
-      return;
-    }
-
-    setIsLoading(true);
-    const startedAt = getNowMs();
-    setRunStartedAt(startedAt);
-    setRunCompletedAt(0);
-    setLastContentAt(0);
-    setLastEventAt(startedAt);
-    setError("");
-    setProgressOpen(true);
-    setProgressStatus("running");
-    setProgressError("");
-    setProgressTitle("AI 生成过程");
-    setProgressFloatingTitle("AI 正在生成");
-    setStreamPreview("");
-    setReceivedChars(0);
-    setProgressLogs([
-      {
-        id: "start",
-        type: "stage",
-        message: "准备开始生成",
-        detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
-          provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
-        }`,
-      },
-    ]);
+  function buildGenerateFormData(mode: "strategy" | "cases", strategy?: CoverageBlueprint) {
     const formData = new FormData();
-    formData.append("file", file);
+    if (file) formData.append("file", file);
+    formData.append("mode", mode);
     formData.append("provider", provider);
     formData.append("model", model.trim() || providerModels[provider]);
     formData.append("thinkingMode", thinkingMode);
@@ -1718,67 +2146,162 @@ export default function Home() {
     if (trimmedApiKey) {
       formData.append("apiKey", trimmedApiKey);
     }
+    if (strategy) {
+      formData.append("coverageBlueprint", JSON.stringify(recalculateStrategy(strategy)));
+    }
+    return formData;
+  }
 
-    try {
-      const abortController = new AbortController();
-      abortControllerRef.current = abortController;
-      const response = await fetch("/api/generate/stream", {
-        method: "POST",
-        body: formData,
-        signal: abortController.signal,
-      });
+  async function readGenerateStream(formData: FormData, emptyMessage: string) {
+    const abortController = new AbortController();
+    abortControllerRef.current = abortController;
+    const response = await fetch("/api/generate/stream", {
+      method: "POST",
+      body: formData,
+      signal: abortController.signal,
+    });
 
-      if (!response.ok || !response.body) {
-        throw new Error("生成服务没有返回可读取的进度流。");
-      }
+    if (!response.ok || !response.body) {
+      throw new Error("生成服务没有返回可读取的进度流。");
+    }
 
-      const reader = response.body.getReader();
-      const decoder = new TextDecoder();
-      let buffer = "";
-      let finalResult: GenerateResponse | null = null;
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let buffer = "";
+    let finalResult: GenerateResponse | null = null;
 
-      while (true) {
-        const { value, done } = await reader.read();
-        if (done) break;
+    while (true) {
+      const { value, done } = await reader.read();
+      if (done) break;
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split("\n");
-        buffer = lines.pop() ?? "";
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() ?? "";
 
-        for (const line of lines) {
-          if (!line.trim()) continue;
-          const event = JSON.parse(line) as GenerateStreamEvent;
-          if (event.type === "stage") {
-            setLastEventAt(getNowMs());
-            appendProgressLog("stage", event.message, event.detail);
-          }
-          if (event.type === "thinking") {
-            setLastEventAt(getNowMs());
-            appendProgressLog("thinking", event.message, event.detail);
-          }
-          if (event.type === "chunk") {
-            const eventTime = getNowMs();
-            setLastEventAt(eventTime);
-            setLastContentAt(eventTime);
-            setReceivedChars((current) => current + event.content.length);
-            setStreamPreview((current) => `${current}${event.content}`.slice(-16_000));
-          }
-          if (event.type === "result") {
-            setLastEventAt(getNowMs());
-            finalResult = event.data;
-            writeCurrentCaseReport(event.data);
-            setResult(event.data);
-          }
-          if (event.type === "error") {
-            appendProgressLog("error", event.message, event.detail);
-            setProgressError(event.detail ? `${event.message} ${event.detail}` : event.message);
-            throw new Error(event.message);
-          }
+      for (const line of lines) {
+        if (!line.trim()) continue;
+        const event = JSON.parse(line) as GenerateStreamEvent;
+        if (event.type === "stage") {
+          setLastEventAt(getNowMs());
+          appendProgressLog("stage", event.message, event.detail);
+        }
+        if (event.type === "thinking") {
+          setLastEventAt(getNowMs());
+          appendProgressLog("thinking", event.message, event.detail);
+        }
+        if (event.type === "chunk") {
+          const eventTime = getNowMs();
+          setLastEventAt(eventTime);
+          setLastContentAt(eventTime);
+          setReceivedChars((current) => current + event.content.length);
+          setStreamPreview((current) => `${current}${event.content}`.slice(-16_000));
+        }
+        if (event.type === "result") {
+          setLastEventAt(getNowMs());
+          finalResult = event.data;
+        }
+        if (event.type === "error") {
+          appendProgressLog("error", event.message, event.detail);
+          setProgressError(event.detail ? `${event.message} ${event.detail}` : event.message);
+          throw new Error(event.message);
         }
       }
+    }
 
-      if (!finalResult) throw new Error("生成结束但没有收到测试用例结果。");
+    if (!finalResult) throw new Error(emptyMessage);
+    return finalResult;
+  }
 
+  function validateCaseGenerationInput() {
+    if (isLoading) {
+      setProgressOpen(true);
+      return false;
+    }
+
+    if (!isClientReady) {
+      setError("正在读取本机保存的模型配置，请稍后再试。");
+      return false;
+    }
+
+    if (!file) {
+      setError("请选择 PRD PDF。");
+      return false;
+    }
+
+    return true;
+  }
+
+  function startCaseProgress(title: string, floatingTitle: string, message: string) {
+    startProgress(title, floatingTitle, {
+      id: "start",
+      type: "stage",
+      message,
+      detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
+        provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
+      }`,
+    });
+  }
+
+  async function generateStrategy() {
+    if (!validateCaseGenerationInput()) return;
+
+    setIsLoading(true);
+    setError("");
+    setResult(null);
+    startCaseProgress("AI 测试策略生成过程", "AI 正在生成策略", "准备生成测试策略");
+
+    try {
+      const finalResult = await readGenerateStream(buildGenerateFormData("strategy"), "策略生成结束但没有收到覆盖蓝图。");
+      if (finalResult.coverageBlueprint && !finalResult.cases.length) {
+        setStrategyDraft(recalculateStrategy(finalResult.coverageBlueprint));
+        setResult(null);
+      } else {
+        writeCurrentCaseReport(finalResult);
+        setResult(finalResult);
+        setStrategyDraft(finalResult.coverageBlueprint ? recalculateStrategy(finalResult.coverageBlueprint) : null);
+        await refreshRunHistory();
+      }
+      setProgressStatus("success");
+      setRunCompletedAt(getNowMs());
+      setActiveModule("全部");
+      window.setTimeout(() => setProgressOpen(false), 900);
+    } catch (caught) {
+      const isAbort = caught instanceof Error && caught.name === "AbortError";
+      const message = isAbort ? "已停止本次策略生成。" : caught instanceof Error ? caught.message : "策略生成失败";
+      if (isAbort) {
+        setError("");
+        setProgressStatus("cancelled");
+        setProgressError("已停止本次策略生成。");
+        refreshRunHistory();
+        window.setTimeout(() => refreshRunHistory(), 1500);
+      } else {
+        setError(message);
+        setProgressStatus("error");
+        setProgressError((current) => current || message);
+      }
+      setRunCompletedAt(getNowMs());
+    } finally {
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
+  }
+
+  async function generateCasesFromStrategy() {
+    if (!validateCaseGenerationInput()) return;
+    if (!strategyDraft) {
+      await generateStrategy();
+      return;
+    }
+
+    setIsLoading(true);
+    setError("");
+    startCaseProgress("AI 生成过程", "AI 正在生成", "准备按测试策略生成用例");
+
+    try {
+      const finalResult = await readGenerateStream(buildGenerateFormData("cases", strategyDraft), "生成结束但没有收到测试用例结果。");
+      writeCurrentCaseReport(finalResult);
+      setResult(finalResult);
+      setStrategyDraft(finalResult.coverageBlueprint ? recalculateStrategy(finalResult.coverageBlueprint) : strategyDraft);
       await refreshRunHistory();
       setProgressStatus("success");
       setRunCompletedAt(getNowMs());
@@ -1803,6 +2326,14 @@ export default function Home() {
       abortControllerRef.current = null;
       setIsLoading(false);
     }
+  }
+
+  async function generate() {
+    if (strategyDraft) {
+      await generateCasesFromStrategy();
+      return;
+    }
+    await generateStrategy();
   }
 
   function stopGeneration() {
@@ -1910,7 +2441,17 @@ export default function Home() {
           onClick={analysisMode ? runAgentAnalysis : generate}
         >
           {isLoading || isAgentRunning ? <Loader2 className="size-4 animate-spin" /> : <Sparkles className="size-4" />}
-          {analysisMode ? (isAgentRunning ? "智能体分析中" : currentAgentOption.actionLabel) : isLoading ? "正在 AI 生成，查看过程" : "生成测试用例"}
+          {analysisMode
+            ? isAgentRunning
+              ? "智能体分析中"
+              : currentAgentOption.actionLabel
+            : isLoading
+              ? strategyDraft
+                ? "正在按策略生成，查看过程"
+                : "正在生成策略，查看过程"
+              : strategyDraft
+                ? "按策略生成用例"
+                : "生成测试策略"}
         </button>
 
         {(analysisMode ? agentError : error) ? (
@@ -2047,6 +2588,15 @@ export default function Home() {
                 {renderExecutionPanel()}
                 <CaseRunHistoryButton count={currentAgentHistory.length} />
               </div>
+              <StrategyEditorPanel
+                disabled={isLoading}
+                fileName={file?.name}
+                strategy={strategyDraft}
+                onChange={setStrategyDraft}
+                onClear={() => setStrategyDraft(null)}
+                onGenerate={generateCasesFromStrategy}
+                onRegenerate={generateStrategy}
+              />
               {result ? (
                 <>
                   <div className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
@@ -2099,6 +2649,46 @@ export default function Home() {
 
                   <RunStatsPanel result={result} />
 
+                  {result.qualityReport ? (
+                    <section className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+                      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+                        <div>
+                          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+                            <CheckCircle2 className="size-4" />
+                            质量审查
+                          </div>
+                          <h2 className="mt-2 text-xl font-semibold tracking-normal">{result.qualityReport.score} 分</h2>
+                          <p className="mt-1 text-sm leading-6 text-slate-500">{result.qualityReport.summary}</p>
+                        </div>
+                        <div className="grid grid-cols-2 gap-2 text-sm">
+                          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+                            <p className="text-xs text-slate-400">修订</p>
+                            <p className="mt-1 font-semibold text-slate-800">{result.qualityReport.revisedCaseCount} 条</p>
+                          </div>
+                          <div className="rounded-lg bg-slate-50 px-3 py-2 ring-1 ring-slate-200">
+                            <p className="text-xs text-slate-400">问题</p>
+                            <p className="mt-1 font-semibold text-slate-800">{result.qualityReport.findingCount} 个</p>
+                          </div>
+                        </div>
+                      </div>
+                      {result.qualityReport.findings.length ? (
+                        <div className="mt-4 grid gap-2 lg:grid-cols-2">
+                          {result.qualityReport.findings.slice(0, 4).map((finding, index) => (
+                            <div key={`${finding.issueType}-${index}`} className="rounded-lg bg-slate-50 p-3 text-sm ring-1 ring-slate-200">
+                              <div className="flex flex-wrap items-center gap-2">
+                                <span className={clsx("rounded-full px-2 py-0.5 text-xs font-medium ring-1", finding.severity === "high" ? "bg-rose-50 text-rose-700 ring-rose-200" : finding.severity === "medium" ? "bg-amber-50 text-amber-700 ring-amber-200" : "bg-slate-100 text-slate-600 ring-slate-200")}>
+                                  {finding.issueType}
+                                </span>
+                                {finding.title ? <span className="text-xs text-slate-400">{finding.title}</span> : null}
+                              </div>
+                              <p className="mt-2 leading-6 text-slate-700">{finding.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                    </section>
+                  ) : null}
+
                   <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
                     {[
                       { label: "模块", value: `${moduleNames.length} 个`, desc: moduleNames.slice(0, 3).join("、") || "未识别" },
@@ -2116,7 +2706,7 @@ export default function Home() {
 
                   <CoverageBlueprintPanel activeModule={activeModule} result={result} />
                 </>
-              ) : (
+              ) : !strategyDraft ? (
                 <div className="grid min-h-[240px] place-items-center rounded-lg border border-dashed border-slate-300 bg-white p-6 text-center shadow-sm">
                   <div className="w-full max-w-2xl">
                     <div className="mx-auto grid size-11 place-items-center rounded-lg bg-teal-50 text-teal-700 ring-1 ring-teal-200">
@@ -2152,7 +2742,7 @@ export default function Home() {
                     </button>
                   </div>
                 </div>
-              )}
+              ) : null}
             </>
           )}
         </section>

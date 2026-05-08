@@ -202,6 +202,22 @@ export function buildCoverageReview(result: GenerateResponse | null | undefined)
           moduleName: displayModuleName,
         });
       }
+
+      const requiredTechniques = testPoint.designTechniques ?? [];
+      if (requiredTechniques.length) {
+        const matchedCases = moduleCases.filter((item) => matchesTestPoint(item, testPoint.id, testPoint.name));
+        const coveredTechniques = new Set(matchedCases.flatMap((item) => item.designTechniques ?? []));
+        const missingTechniques = requiredTechniques.filter((technique) => !coveredTechniques.has(technique));
+        if (matchedCases.length && missingTechniques.length === requiredTechniques.length) {
+          pushIssue(issues, {
+            id: `testpoint-${blueprintModule.name}-${testPoint.id}-missing-techniques`,
+            severity: "info",
+            title: "测试设计方法未落到用例",
+            detail: `${displayModuleName} 的“${testPoint.name}”蓝图要求 ${requiredTechniques.join("、")}，但匹配用例未标注这些方法。`,
+            moduleName: displayModuleName,
+          });
+        }
+      }
     }
 
     for (const note of blueprintModule.coverageNotes.slice(0, 2)) {

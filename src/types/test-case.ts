@@ -20,6 +20,38 @@ export type TestAgentType = "requirement-review" | "case-generator" | "release-r
 
 export type TestAgentAnalysisType = Exclude<TestAgentType, "case-generator">;
 
+export type TestDesignTechnique =
+  | "等价类"
+  | "边界值"
+  | "判定表"
+  | "状态迁移"
+  | "流程分支"
+  | "权限矩阵"
+  | "组合覆盖"
+  | "接口契约"
+  | "幂等"
+  | "并发"
+  | "回滚";
+
+export type QualityFindingSeverity = "info" | "medium" | "high";
+
+export type QualityFinding = {
+  severity: QualityFindingSeverity;
+  issueType: string;
+  caseId?: string;
+  title?: string;
+  detail: string;
+  suggestion: string;
+};
+
+export type GenerationQualityReport = {
+  score: number;
+  summary: string;
+  revisedCaseCount: number;
+  findingCount: number;
+  findings: QualityFinding[];
+};
+
 export type GenerationUsage = {
   promptTokens: number;
   completionTokens: number;
@@ -57,15 +89,20 @@ export type CoverageTestPoint = {
   id: string;
   name: string;
   evidence: string;
+  requirementId?: string;
+  requirementSection?: string;
+  sourceQuote?: string;
   fields: string[];
   states: string[];
   roles: string[];
   flows: string[];
   rules: string[];
+  designTechniques?: TestDesignTechnique[];
   riskLevel: RiskLevel;
   riskFactors: string[];
   coverage: CategoryTargetMap;
   expectedCaseCount: number;
+  locked?: boolean;
 };
 
 export type CoverageModule = {
@@ -77,10 +114,12 @@ export type CoverageModule = {
   isCore: boolean;
   testPoints: CoverageTestPoint[];
   riskPoints: string[];
+  designTechniques?: TestDesignTechnique[];
   categoryTargets: CategoryTargetMap;
   skippedCategories: string[];
   coverageNotes: string[];
   targetCaseCount: number;
+  locked?: boolean;
 };
 
 export type CoverageBlueprint = {
@@ -103,15 +142,24 @@ export type TestCase = {
   estimatedHours?: number | null;
   remainingHours?: number | null;
   relatedWorkItems?: string;
+  requirementId?: string;
+  requirementSection?: string;
+  sourceQuote?: string;
   testPointId?: string;
   testPoint?: string;
   evidence?: string;
+  fieldsCovered?: string[];
+  statesCovered?: string[];
+  rulesCovered?: string[];
+  riskTags?: string[];
+  designTechniques?: TestDesignTechnique[];
   preconditions: string;
   steps: string[];
   expectedResults?: string[];
   expectedResult: string;
   followers?: string;
   remarks?: string;
+  qualityFindings?: QualityFinding[];
 };
 
 export type GenerateResponse = {
@@ -122,6 +170,7 @@ export type GenerateResponse = {
   cases: TestCase[];
   warnings: string[];
   coverageBlueprint?: CoverageBlueprint;
+  qualityReport?: GenerationQualityReport;
   stats?: GenerationStats;
 };
 
