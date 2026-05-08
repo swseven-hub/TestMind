@@ -8,8 +8,6 @@ import {
   CheckCircle2,
   CheckCheck,
   ChevronDown,
-  ChevronLeft,
-  ChevronRight,
   CircleAlert,
   ClipboardCheck,
   Download,
@@ -106,7 +104,6 @@ const historyUiStorageKeys = {
 
 const historyUiChangeEvent = "testmind.history-ui-change";
 
-const pageSizeOptions = [25, 50, 100];
 const priorityOptions: TestPriority[] = ["P0", "P1", "P2"];
 const moduleGroupPrefix = "__module_group__:";
 
@@ -206,74 +203,6 @@ function findBestModuleName(moduleName: string, moduleNames: string[]) {
     const normalizedItem = normalizeModuleForMatch(item);
     return normalizedItem.includes(normalizedTarget) || normalizedTarget.includes(normalizedItem);
   });
-}
-
-function PaginationControls({
-  end,
-  page,
-  pageSize,
-  start,
-  total,
-  totalPages,
-  onPageChange,
-  onPageSizeChange,
-}: {
-  end: number;
-  page: number;
-  pageSize: number;
-  start: number;
-  total: number;
-  totalPages: number;
-  onPageChange: (page: number) => void;
-  onPageSizeChange: (pageSize: number) => void;
-}) {
-  if (!total) return null;
-
-  return (
-    <div className="flex flex-col gap-3 rounded-lg border border-slate-200 bg-white px-4 py-3 text-sm shadow-sm lg:flex-row lg:items-center lg:justify-between">
-      <div className="text-slate-500">
-        当前显示 <span className="font-semibold text-slate-800">{start}-{end}</span> / {total} 条
-      </div>
-      <div className="flex flex-wrap items-center gap-2">
-        <div className="flex rounded-lg border border-slate-200 bg-slate-50 p-1">
-          {pageSizeOptions.map((option) => (
-            <button
-              key={option}
-              className={clsx(
-                "h-8 rounded-md px-2.5 text-xs font-medium transition",
-                pageSize === option ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white hover:text-slate-950",
-              )}
-              type="button"
-              onClick={() => onPageSizeChange(option)}
-            >
-              {option}/页
-            </button>
-          ))}
-        </div>
-        <button
-          aria-label="上一页"
-          className="grid size-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-          disabled={page <= 1}
-          type="button"
-          onClick={() => onPageChange(page - 1)}
-        >
-          <ChevronLeft className="size-4" />
-        </button>
-        <span className="min-w-16 text-center text-sm font-medium text-slate-700">
-          {page} / {totalPages}
-        </span>
-        <button
-          aria-label="下一页"
-          className="grid size-9 place-items-center rounded-lg border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-50 disabled:cursor-not-allowed disabled:text-slate-300"
-          disabled={page >= totalPages}
-          type="button"
-          onClick={() => onPageChange(page + 1)}
-        >
-          <ChevronRight className="size-4" />
-        </button>
-      </div>
-    </div>
-  );
 }
 
 function formatJsonPreview(value: unknown) {
@@ -384,8 +313,6 @@ export default function HistoryPage() {
   const [activeId, setActiveId] = useState("");
   const [activeModule, setActiveModule] = useState("全部");
   const [activeReviewStatus, setActiveReviewStatus] = useState<CaseReviewStatus | "全部">("全部");
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(50);
   const [coverageReviewOpen, setCoverageReviewOpen] = useStoredBoolean(historyUiStorageKeys.coverageReviewOpen, true);
   const [leftRailCollapsed, setLeftRailCollapsed] = useStoredBoolean(historyUiStorageKeys.leftRailCollapsed, false);
   const [rightRailCollapsed, setRightRailCollapsed] = useStoredBoolean(historyUiStorageKeys.rightRailCollapsed, false);
@@ -465,12 +392,7 @@ export default function HistoryPage() {
     [activeReviewStatus, moduleFilteredCases],
   );
   const coverageIssues = useMemo(() => buildCoverageReview(selectedRecord?.result), [selectedRecord]);
-  const totalPages = Math.max(1, Math.ceil(visibleCases.length / pageSize));
-  const safePage = Math.min(currentPage, totalPages);
-  const pageStart = visibleCases.length ? (safePage - 1) * pageSize + 1 : 0;
-  const pageEnd = Math.min(safePage * pageSize, visibleCases.length);
-  const paginatedCases = useMemo(() => visibleCases.slice((safePage - 1) * pageSize, safePage * pageSize), [pageSize, safePage, visibleCases]);
-  const groupedCases = useMemo(() => groupCases(paginatedCases), [paginatedCases]);
+  const groupedCases = useMemo(() => groupCases(visibleCases), [visibleCases]);
   const categoryCounts = useMemo(() => {
     const data = Object.fromEntries(categories.map((category) => [category, 0])) as Record<TestCategory, number>;
     for (const item of visibleCases) data[item.category] += 1;
@@ -535,7 +457,6 @@ export default function HistoryPage() {
         selectedRecord.id,
         visibleCases.map((item) => ({ caseId: item.id, module: item.module, status })),
       );
-      setCurrentPage(1);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "批量更新用例状态失败。");
     } finally {
@@ -551,7 +472,6 @@ export default function HistoryPage() {
         setActiveId("");
         setActiveModule("全部");
         setActiveReviewStatus("全部");
-        setCurrentPage(1);
       }
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "删除运行记录失败。");
@@ -565,7 +485,6 @@ export default function HistoryPage() {
       setActiveId("");
       setActiveModule("全部");
       setActiveReviewStatus("全部");
-      setCurrentPage(1);
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "清空运行记录失败。");
     }
@@ -575,13 +494,11 @@ export default function HistoryPage() {
     setActiveId(id);
     setActiveModule("全部");
     setActiveReviewStatus("全部");
-    setCurrentPage(1);
   }
 
   function selectModule(moduleName: string) {
     setActiveReviewStatus("全部");
     setActiveModule(moduleName);
-    setCurrentPage(1);
     window.setTimeout(() => {
       const groupName = getModuleGroupName(moduleName);
       const firstGroupModule = groupName ? moduleGroupMap.get(groupName)?.[0] : "";
@@ -591,14 +508,8 @@ export default function HistoryPage() {
     }, 80);
   }
 
-  function changePageSize(nextPageSize: number) {
-    setPageSize(nextPageSize);
-    setCurrentPage(1);
-  }
-
   function selectReviewStatus(status: CaseReviewStatus | "全部") {
     setActiveReviewStatus(status);
-    setCurrentPage(1);
   }
 
   function focusCoverageModule(moduleName: string) {
@@ -945,24 +856,11 @@ export default function HistoryPage() {
                 onToggle={() => setCoverageReviewOpen(!coverageReviewOpen)}
               />
 
-              {visibleCases.length ? (
-                <PaginationControls
-                  end={pageEnd}
-                  page={safePage}
-                  pageSize={pageSize}
-                  start={pageStart}
-                  total={visibleCases.length}
-                  totalPages={totalPages}
-                  onPageChange={setCurrentPage}
-                  onPageSizeChange={changePageSize}
-                />
-              ) : null}
-
               {groupedCases.length ? (
                 <div className="grid gap-5">
                   {groupedCases.map((group, groupIndex) => {
                     const moduleTotal = moduleCounts[group.moduleName] ?? group.cases.length;
-                    const moduleCaseText = group.cases.length === moduleTotal ? `${moduleTotal} 条测试用例` : `本页 ${group.cases.length} 条 / 模块 ${moduleTotal} 条`;
+                    const moduleCaseText = `${moduleTotal} 条测试用例`;
                     const moduleStyleIndex = moduleNames.indexOf(group.moduleName);
                     const moduleHeaderStyle = moduleHeaderStyles[(moduleStyleIndex >= 0 ? moduleStyleIndex : groupIndex) % moduleHeaderStyles.length];
                     return (
@@ -1012,18 +910,6 @@ export default function HistoryPage() {
                 </div>
               )}
 
-              {groupedCases.length ? (
-                <PaginationControls
-                  end={pageEnd}
-                  page={safePage}
-                  pageSize={pageSize}
-                  start={pageStart}
-                  total={visibleCases.length}
-                  totalPages={totalPages}
-                  onPageChange={setCurrentPage}
-                  onPageSizeChange={changePageSize}
-                />
-              ) : null}
             </>
           ) : (
             <div className="grid min-h-96 place-items-center rounded-lg border border-slate-200 bg-white p-8 text-center shadow-sm">
