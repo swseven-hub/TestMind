@@ -20,6 +20,7 @@ type RunHistoryBase = {
   agent: TestAgentType;
   status: RunStatus;
   createdAt: string;
+  pinnedAt?: string;
   completedAt?: string;
   fileName: string;
   provider: RunHistoryProvider;
@@ -191,6 +192,19 @@ export async function updateRunHistoryCaseStatuses(
   if (!response.ok) {
     const payload = (await response.json().catch(() => null)) as { message?: string } | null;
     throw new Error(payload?.message || "更新用例状态失败。");
+  }
+  return refreshRunHistory();
+}
+
+export async function updateRunHistoryPinned(id: string, pinned: boolean) {
+  const response = await fetch("/api/run-history", {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ id, pinned }),
+  });
+  if (!response.ok) {
+    const payload = (await response.json().catch(() => null)) as { message?: string } | null;
+    throw new Error(payload?.message || "更新运行记录置顶状态失败。");
   }
   return refreshRunHistory();
 }

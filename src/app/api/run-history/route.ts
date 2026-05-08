@@ -7,6 +7,7 @@ import {
   listRunHistoryRecords,
   saveRunHistoryRecord,
   updateRunHistoryCaseStatuses,
+  updateRunHistoryPinned,
 } from "@/lib/server/run-history-db";
 import { normalizeCaseReviewStatus } from "@/lib/case-review";
 import { normalizeProvider, normalizeThinkingMode } from "@/lib/model-config";
@@ -20,6 +21,7 @@ type IncomingRecord = {
   agent?: TestAgentType;
   status?: RunStatus;
   createdAt?: string;
+  pinnedAt?: string;
   completedAt?: string;
   provider?: string;
   model?: string;
@@ -86,6 +88,7 @@ function normalizeIncomingRecord(record: IncomingRecord) {
     agent: normalizeTestAgent(record.agent || "case-generator"),
     status: record.status ?? "success",
     createdAt: record.createdAt,
+    pinnedAt: record.pinnedAt,
     completedAt: record.completedAt,
     provider: normalizeProvider(record.provider || record.result.stats?.provider || "deepseek"),
     model: record.model || record.result.stats?.model || "unknown",
@@ -117,8 +120,13 @@ export async function POST(request: NextRequest) {
 }
 
 export async function PATCH(request: NextRequest) {
-  const body = (await request.json().catch(() => null)) as { id?: string; caseUpdates?: IncomingCaseStatusUpdate[] } | null;
+  const body = (await request.json().catch(() => null)) as { id?: string; caseUpdates?: IncomingCaseStatusUpdate[]; pinned?: boolean } | null;
   if (!body?.id) return NextResponse.json({ message: "缺少运行记录 ID。" }, { status: 400 });
+  if (typeof body.pinned === "boolean") {
+    const record = updateRunHistoryPinned(body.id, body.pinned);
+    if (!record) return NextResponse.json({ message: "未找到对应运行记录。" }, { status: 404 });
+    return NextResponse.json({ record });
+  }
   if (!Array.isArray(body.caseUpdates) || !body.caseUpdates.length) {
     return NextResponse.json({ message: "缺少要更新的用例状态。" }, { status: 400 });
   }

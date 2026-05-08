@@ -19,6 +19,8 @@ import {
   PanelRightClose,
   PanelRightOpen,
   Pencil,
+  Pin,
+  PinOff,
   Save,
   Search,
   Shield,
@@ -39,6 +41,7 @@ import {
   isCaseRunHistoryRecord,
   removeRunHistoryRecord,
   updateRunHistoryCaseStatuses,
+  updateRunHistoryPinned,
   useRunHistory,
   type CaseRunHistoryRecord,
 } from "@/lib/run-history";
@@ -274,9 +277,12 @@ export default function HistoryPage() {
   const [isExportingExcel, setIsExportingExcel] = useState(false);
   const [updatingStatusKey, setUpdatingStatusKey] = useState("");
   const [updatingCaseKey, setUpdatingCaseKey] = useState("");
+  const [updatingPinnedId, setUpdatingPinnedId] = useState("");
+  const [recordMenu, setRecordMenu] = useState<{ id: string; x: number; y: number } | null>(null);
   const [bulkUpdatingStatus, setBulkUpdatingStatus] = useState<CaseReviewStatus | "">("");
   const [error, setError] = useState("");
   const selectedRecord = history.find((record) => record.id === activeId) ?? history[0] ?? null;
+  const menuRecord = recordMenu ? history.find((record) => record.id === recordMenu.id) ?? null : null;
   const allCases = useMemo(() => selectedRecord?.result.cases ?? [], [selectedRecord]);
   const workspaceGridClass = leftRailCollapsed
     ? rightRailCollapsed
@@ -298,6 +304,22 @@ export default function HistoryPage() {
     window.addEventListener("resize", collapseWhenNarrow);
     return () => window.removeEventListener("resize", collapseWhenNarrow);
   }, [leftRailCollapsed, rightRailCollapsed, setLeftRailCollapsed, setRightRailCollapsed]);
+
+  useEffect(() => {
+    if (!recordMenu || typeof window === "undefined") return;
+    const closeMenu = () => setRecordMenu(null);
+    const closeOnEscape = (event: KeyboardEvent) => {
+      if (event.key === "Escape") closeMenu();
+    };
+    window.addEventListener("click", closeMenu);
+    window.addEventListener("scroll", closeMenu, true);
+    window.addEventListener("keydown", closeOnEscape);
+    return () => {
+      window.removeEventListener("click", closeMenu);
+      window.removeEventListener("scroll", closeMenu, true);
+      window.removeEventListener("keydown", closeOnEscape);
+    };
+  }, [recordMenu]);
 
   const moduleCounts = useMemo(() => {
     const data: Record<string, number> = {};
@@ -398,6 +420,19 @@ export default function HistoryPage() {
       setError(caught instanceof Error ? caught.message : "更新用例内容失败。");
     } finally {
       setUpdatingCaseKey("");
+    }
+  }
+
+  async function toggleRecordPinned(record: CaseRunHistoryRecord) {
+    setUpdatingPinnedId(record.id);
+    setRecordMenu(null);
+    setError("");
+    try {
+      await updateRunHistoryPinned(record.id, !record.pinnedAt);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "更新运行记录置顶状态失败。");
+    } finally {
+      setUpdatingPinnedId("");
     }
   }
 
@@ -605,14 +640,21 @@ export default function HistoryPage() {
                         key={record.id}
                         className={clsx(
                           "rounded-lg border transition",
-                          active ? "border-slate-950 bg-slate-950 text-white" : "border-slate-100 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
+                          active ? "border-slate-950 bg-slate-950 text-white" : record.pinnedAt ? "border-teal-200 bg-teal-50 text-slate-800 hover:border-teal-300" : "border-slate-100 bg-slate-50 text-slate-700 hover:border-slate-300 hover:bg-white",
                         )}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          setRecordMenu({ id: record.id, x: event.clientX, y: event.clientY });
+                        }}
                       >
                         <div className="flex items-stretch gap-1 p-3">
                           <button className="min-w-0 flex-1 text-left" type="button" onClick={() => selectRecord(record.id)}>
                             <div className="flex items-start justify-between gap-3">
                               <div className="min-w-0">
-                                <p className="truncate text-sm font-semibold">{record.fileName}</p>
+                                <p className="flex min-w-0 items-center gap-1.5 truncate text-sm font-semibold">
+                                  {record.pinnedAt ? <Pin className={clsx("size-3.5 shrink-0", active ? "text-teal-200" : "text-teal-700")} /> : null}
+                                  <span className="truncate">{record.fileName}</span>
+                                </p>
                                 <p className={clsx("mt-1 text-xs", active ? "text-slate-300" : "text-slate-500")}>
                                   {formatRunTime(record.createdAt)} · {providerLabels[record.provider]} · {record.caseCount} 条
                                 </p>
@@ -632,6 +674,7 @@ export default function HistoryPage() {
                               {record.result.stats?.reasoningEffort ? ` · 推理${reasoningEffortLabels[record.result.stats.reasoningEffort]}` : ""}
                             </p>
                           </button>
+                          {updatingPinnedId === record.id ? <Loader2 className="mt-2 size-4 shrink-0 animate-spin text-teal-600" /> : null}
                           <button
                             aria-label="删除运行记录"
                             className={clsx(
@@ -1191,6 +1234,24 @@ export default function HistoryPage() {
           </div>
         </aside>
       </section>
+
+      {menuRecord ? (
+        <div
+          className="fixed z-[60] w-44 overflow-hidden rounded-lg border border-slate-200 bg-white p-1 shadow-xl ring-1 ring-slate-900/5"
+          style={{ left: Math.min(recordMenu?.x ?? 0, window.innerWidth - 190), top: Math.min(recordMenu?.y ?? 0, window.innerHeight - 72) }}
+          onClick={(event) => event.stopPropagation()}
+        >
+          <button
+            className="flex min-h-9 w-full items-center gap-2 rounded-md px-3 text-left text-sm font-medium text-slate-700 transition hover:bg-slate-50 hover:text-slate-950 disabled:cursor-wait disabled:text-slate-300"
+            disabled={updatingPinnedId === menuRecord.id}
+            type="button"
+            onClick={() => toggleRecordPinned(menuRecord)}
+          >
+            {menuRecord.pinnedAt ? <PinOff className="size-4" /> : <Pin className="size-4" />}
+            {menuRecord.pinnedAt ? "取消置顶" : "置顶到最上面"}
+          </button>
+        </div>
+      ) : null}
     </main>
   );
 }

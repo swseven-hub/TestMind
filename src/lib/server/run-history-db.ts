@@ -20,6 +20,7 @@ type StoredRunHistoryBase = {
   agent: TestAgentType;
   status: RunStatus;
   createdAt: string;
+  pinnedAt?: string;
   completedAt?: string;
   fileName: string;
   provider: Provider;
@@ -53,6 +54,7 @@ type RunHistoryRow = {
   agent: TestAgentType | null;
   status: RunStatus | null;
   created_at: string;
+  pinned_at: string | null;
   completed_at: string | null;
   file_name: string;
   provider: Provider;
@@ -88,6 +90,7 @@ function getDatabase() {
       agent TEXT NOT NULL DEFAULT 'case-generator',
       status TEXT NOT NULL DEFAULT 'success',
       created_at TEXT NOT NULL,
+      pinned_at TEXT,
       completed_at TEXT,
       file_name TEXT NOT NULL,
       provider TEXT NOT NULL,
@@ -118,6 +121,7 @@ function migrateRunHistoryTable(db: DatabaseSync) {
   const additions: Array<[string, string]> = [
     ["agent", "ALTER TABLE run_history ADD COLUMN agent TEXT NOT NULL DEFAULT 'case-generator'"],
     ["status", "ALTER TABLE run_history ADD COLUMN status TEXT NOT NULL DEFAULT 'success'"],
+    ["pinned_at", "ALTER TABLE run_history ADD COLUMN pinned_at TEXT"],
     ["completed_at", "ALTER TABLE run_history ADD COLUMN completed_at TEXT"],
     ["failed_stage", "ALTER TABLE run_history ADD COLUMN failed_stage TEXT"],
     ["error_message", "ALTER TABLE run_history ADD COLUMN error_message TEXT"],
@@ -129,7 +133,10 @@ function migrateRunHistoryTable(db: DatabaseSync) {
   for (const [name, statement] of additions) {
     if (!columns.has(name)) db.exec(statement);
   }
-  db.exec("CREATE INDEX IF NOT EXISTS idx_run_history_agent_created_at ON run_history(agent, created_at DESC)");
+  db.exec(`
+    CREATE INDEX IF NOT EXISTS idx_run_history_agent_created_at ON run_history(agent, created_at DESC);
+    CREATE INDEX IF NOT EXISTS idx_run_history_pinned_created_at ON run_history(pinned_at DESC, created_at DESC);
+  `);
 }
 
 function createId() {
@@ -191,6 +198,7 @@ function rowToRecord(row: RunHistoryRow): StoredRunHistoryRecord | null {
       agent,
       status: row.status ?? "success",
       createdAt: row.created_at,
+      ...(row.pinned_at ? { pinnedAt: row.pinned_at } : {}),
       ...(row.completed_at ? { completedAt: row.completed_at } : {}),
       fileName: row.file_name,
       provider: row.provider,
@@ -229,7 +237,7 @@ function rowToRecord(row: RunHistoryRow): StoredRunHistoryRecord | null {
 
 export function listRunHistoryRecords() {
   const db = getDatabase();
-  const rows = db.prepare("SELECT * FROM run_history ORDER BY created_at DESC").all() as RunHistoryRow[];
+  const rows = db.prepare("SELECT * FROM run_history ORDER BY pinned_at IS NULL, pinned_at DESC, created_at DESC").all() as RunHistoryRow[];
   return rows.map(rowToRecord).filter((item): item is StoredRunHistoryRecord => Boolean(item));
 }
 
@@ -238,6 +246,7 @@ export function saveRunHistoryRecord(input: {
   agent?: TestAgentType;
   fileName?: string;
   createdAt?: string;
+  pinnedAt?: string;
   completedAt?: string;
   status?: RunStatus;
   provider: Provider;
@@ -255,6 +264,7 @@ export function saveRunHistoryRecord(input: {
   let agent = normalizeHistoryAgent(input.agent);
   if (agent === "case-generator" && isAgentAnalysisResponse(input.result)) agent = input.result.agent;
   const createdAt = input.createdAt || input.result.stats?.startedAt || input.result.stats?.completedAt || new Date().toISOString();
+  const pinnedAt = input.pinnedAt || null;
   const completedAt = input.completedAt || input.result.stats?.completedAt;
   const usage = isGenerateResponse(input.result) ? input.result.stats?.usage : undefined;
   const moduleCount = isGenerateResponse(input.result) ? input.result.stats?.moduleCount ?? getModuleCount(input.result) : getModuleCount(input.result);
@@ -267,6 +277,7 @@ export function saveRunHistoryRecord(input: {
       agent,
       status,
       created_at,
+      pinned_at,
       completed_at,
       file_name,
       provider,
@@ -286,12 +297,13 @@ export function saveRunHistoryRecord(input: {
       last_event_json,
       result_json
     )
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
   `).run(
     id,
     agent,
     input.status ?? "success",
     createdAt,
+    pinnedAt,
     completedAt ?? null,
     fileName,
     input.provider,
@@ -317,6 +329,7 @@ export function saveRunHistoryRecord(input: {
     agent,
     status: input.status ?? "success",
     createdAt,
+    ...(pinnedAt ? { pinnedAt } : {}),
     ...(completedAt ? { completedAt } : {}),
     fileName,
     provider: input.provider,
@@ -350,6 +363,15 @@ export function saveRunHistoryRecord(input: {
   }
 
   throw new Error("运行记录结果类型与智能体不匹配。");
+}
+
+export function updateRunHistoryPinned(id: string, pinned: boolean) {
+  const db = getDatabase();
+  const pinnedAt = pinned ? new Date().toISOString() : null;
+  const result = db.prepare("UPDATE run_history SET pinned_at = ? WHERE id = ?").run(pinnedAt, id);
+  if (!result.changes) return null;
+  const row = db.prepare("SELECT * FROM run_history WHERE id = ?").get(id) as RunHistoryRow | undefined;
+  return row ? rowToRecord(row) : null;
 }
 
 export function updateRunHistoryCaseStatuses(
