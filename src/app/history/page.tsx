@@ -108,6 +108,7 @@ const historyUiChangeEvent = "testmind.history-ui-change";
 
 const pageSizeOptions = [25, 50, 100];
 const priorityOptions: TestPriority[] = ["P0", "P1", "P2"];
+const moduleGroupPrefix = "__module_group__:";
 
 const moduleHeaderStyles = [
   "border-sky-200 bg-sky-50 text-sky-950",
@@ -166,6 +167,22 @@ function groupCases(cases: TestCase[]) {
   const data = new Map<string, TestCase[]>();
   for (const item of cases) data.set(item.module, [...(data.get(item.module) ?? []), item]);
   return [...data.entries()].map(([moduleName, items]) => ({ moduleName, cases: items }));
+}
+
+function splitModuleName(moduleName: string) {
+  const [firstPart, ...restParts] = moduleName.split(/\s*\/\s*/).filter(Boolean);
+  return {
+    parentName: firstPart || moduleName,
+    childName: restParts.join(" / "),
+  };
+}
+
+function getModuleGroupKey(parentName: string) {
+  return `${moduleGroupPrefix}${parentName}`;
+}
+
+function getModuleGroupName(moduleKey: string) {
+  return moduleKey.startsWith(moduleGroupPrefix) ? moduleKey.slice(moduleGroupPrefix.length) : "";
 }
 
 function getModuleDurationLabel(record: CaseRunHistoryRecord | null, moduleName: string) {
@@ -383,10 +400,10 @@ export default function HistoryPage() {
   const workspaceGridClass = leftRailCollapsed
     ? rightRailCollapsed
       ? "grid-cols-[72px_minmax(0,1fr)_72px]"
-      : "grid-cols-[72px_minmax(0,1fr)_280px] xl:grid-cols-[72px_minmax(0,1fr)_320px]"
+      : "grid-cols-[72px_minmax(0,1fr)_320px] xl:grid-cols-[72px_minmax(0,1fr)_360px]"
     : rightRailCollapsed
       ? "grid-cols-[300px_minmax(0,1fr)_72px] xl:grid-cols-[360px_minmax(0,1fr)_72px]"
-      : "grid-cols-[300px_minmax(0,1fr)_280px] xl:grid-cols-[360px_minmax(0,1fr)_320px]";
+      : "grid-cols-[300px_minmax(0,1fr)_320px] xl:grid-cols-[360px_minmax(0,1fr)_360px]";
 
   useEffect(() => {
     if (typeof window === "undefined") return;
@@ -407,8 +424,36 @@ export default function HistoryPage() {
     return data;
   }, [allCases]);
   const moduleNames = useMemo(() => Object.keys(moduleCounts).sort((a, b) => moduleCounts[b] - moduleCounts[a] || a.localeCompare(b, "zh-CN")), [moduleCounts]);
-  const currentModule = activeModule === "全部" || moduleCounts[activeModule] ? activeModule : "全部";
-  const moduleFilteredCases = useMemo(() => (currentModule === "全部" ? allCases : allCases.filter((item) => item.module === currentModule)), [allCases, currentModule]);
+  const moduleDirectory = useMemo(() => {
+    const groups = new Map<string, { children: { childName: string; moduleName: string }[]; count: number }>();
+    for (const moduleName of moduleNames) {
+      const { parentName, childName } = splitModuleName(moduleName);
+      const group = groups.get(parentName) ?? { children: [], count: 0 };
+      group.children.push({ childName, moduleName });
+      group.count += moduleCounts[moduleName] ?? 0;
+      groups.set(parentName, group);
+    }
+    return [...groups.entries()]
+      .map(([parentName, group]) => ({
+        parentName,
+        count: group.count,
+        children: group.children.sort((a, b) => (moduleCounts[b.moduleName] ?? 0) - (moduleCounts[a.moduleName] ?? 0) || a.moduleName.localeCompare(b.moduleName, "zh-CN")),
+      }))
+      .sort((a, b) => b.count - a.count || a.parentName.localeCompare(b.parentName, "zh-CN"));
+  }, [moduleCounts, moduleNames]);
+  const moduleGroupMap = useMemo(() => new Map(moduleDirectory.map((group) => [group.parentName, group.children.map((child) => child.moduleName)])), [moduleDirectory]);
+  const currentModule = activeModule === "全部" || moduleCounts[activeModule] || moduleGroupMap.has(getModuleGroupName(activeModule)) ? activeModule : "全部";
+  const currentModuleGroupName = getModuleGroupName(currentModule);
+  const currentModuleNames = useMemo(() => {
+    if (currentModule === "全部") return moduleNames;
+    if (currentModuleGroupName) return moduleGroupMap.get(currentModuleGroupName) ?? [];
+    return moduleCounts[currentModule] ? [currentModule] : [];
+  }, [currentModule, currentModuleGroupName, moduleCounts, moduleGroupMap, moduleNames]);
+  const moduleFilteredCases = useMemo(() => {
+    if (currentModule === "全部") return allCases;
+    const selectedModules = new Set(currentModuleNames);
+    return allCases.filter((item) => selectedModules.has(item.module));
+  }, [allCases, currentModule, currentModuleNames]);
   const reviewStatusCounts = useMemo(() => {
     const data = Object.fromEntries(caseReviewStatuses.map((status) => [status, 0])) as Record<CaseReviewStatus, number>;
     for (const item of moduleFilteredCases) data[getCaseReviewStatus(item)] += 1;
@@ -538,7 +583,10 @@ export default function HistoryPage() {
     setActiveModule(moduleName);
     setCurrentPage(1);
     window.setTimeout(() => {
-      const targetElement = moduleName === "全部" ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(moduleName));
+      const groupName = getModuleGroupName(moduleName);
+      const firstGroupModule = groupName ? moduleGroupMap.get(groupName)?.[0] : "";
+      const targetModuleName = firstGroupModule || moduleName;
+      const targetElement = moduleName === "全部" ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(targetModuleName));
       targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
     }, 80);
   }
@@ -1069,25 +1117,59 @@ export default function HistoryPage() {
                       <span>全部</span>
                       <span className="shrink-0">{allCases.length}</span>
                     </button>
-                    {moduleNames.map((moduleName) => {
-                      const moduleDurationLabel = getModuleDurationLabel(selectedRecord, moduleName);
+                    {moduleDirectory.map((group) => {
+                      const groupKey = getModuleGroupKey(group.parentName);
+                      const groupActive = currentModule === groupKey;
+                      const childActive = group.children.some((child) => currentModule === child.moduleName);
+                      const showChildren = group.children.some((child) => child.childName);
                       return (
-                        <button
-                          key={moduleName}
-                          aria-pressed={currentModule === moduleName}
-                          className={clsx(
-                            "flex min-h-9 w-full items-center justify-between gap-3 overflow-hidden rounded-lg px-3 py-2 text-left text-sm transition",
-                            currentModule === moduleName ? "bg-slate-950 text-white" : "bg-slate-50 text-slate-700 hover:bg-teal-50 hover:text-teal-800",
-                          )}
-                          title={`${moduleName} · ${moduleCounts[moduleName]} 条${moduleDurationLabel}`}
-                          type="button"
-                          onClick={() => selectModule(moduleName)}
-                        >
-                          <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{moduleName}</span>
-                          <span className="shrink-0 rounded-full bg-white/10 px-2 py-0.5 text-xs ring-1 ring-current/15">
-                            {moduleCounts[moduleName]}
-                          </span>
-                        </button>
+                        <div key={group.parentName} className="rounded-lg bg-slate-50 p-1.5">
+                          <button
+                            aria-pressed={groupActive}
+                            className={clsx(
+                              "flex min-h-10 w-full items-center justify-between gap-3 overflow-hidden rounded-md px-2.5 py-2 text-left text-sm font-semibold transition",
+                              groupActive
+                                ? "bg-slate-950 text-white"
+                                : childActive
+                                  ? "bg-teal-50 text-teal-800 ring-1 ring-teal-100"
+                                  : "text-slate-800 hover:bg-teal-50 hover:text-teal-800",
+                            )}
+                            title={`${group.parentName} · ${group.count} 条`}
+                            type="button"
+                            onClick={() => selectModule(groupKey)}
+                          >
+                            <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{group.parentName}</span>
+                            <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-xs ring-1 ring-current/15", groupActive ? "bg-white/10" : "bg-white")}>
+                              {group.count}
+                            </span>
+                          </button>
+                          {showChildren ? (
+                            <div className="mt-1 grid gap-1 border-l border-slate-200 pl-2">
+                              {group.children.map((child) => {
+                                const moduleDurationLabel = getModuleDurationLabel(selectedRecord, child.moduleName);
+                                const childLabel = child.childName || child.moduleName;
+                                return (
+                                  <button
+                                    key={child.moduleName}
+                                    aria-pressed={currentModule === child.moduleName}
+                                    className={clsx(
+                                      "flex min-h-9 w-full items-center justify-between gap-3 overflow-hidden rounded-md px-2.5 py-2 text-left text-sm transition",
+                                      currentModule === child.moduleName ? "bg-slate-950 text-white" : "text-slate-600 hover:bg-white hover:text-teal-800",
+                                    )}
+                                    title={`${child.moduleName} · ${moduleCounts[child.moduleName]} 条${moduleDurationLabel}`}
+                                    type="button"
+                                    onClick={() => selectModule(child.moduleName)}
+                                  >
+                                    <span className="min-w-0 flex-1 whitespace-normal break-words leading-5">{childLabel}</span>
+                                    <span className={clsx("shrink-0 rounded-full px-2 py-0.5 text-xs ring-1 ring-current/15", currentModule === child.moduleName ? "bg-white/10" : "bg-white")}>
+                                      {moduleCounts[child.moduleName]}
+                                    </span>
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          ) : null}
+                        </div>
                       );
                     })}
                   </div>
