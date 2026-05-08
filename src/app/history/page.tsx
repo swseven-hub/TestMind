@@ -1,6 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { memo, startTransition, useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -153,9 +153,9 @@ function useStoredBoolean(key: string, fallback: boolean) {
     () => readStoredBoolean(key, fallback),
     () => fallback,
   );
-  function update(nextValue: boolean) {
+  const update = useCallback((nextValue: boolean) => {
     writeStoredBoolean(key, nextValue);
-  }
+  }, [key]);
 
   return [value, update] as const;
 }
@@ -393,7 +393,7 @@ export default function HistoryPage() {
     }
   }
 
-  async function updateCaseStatus(item: TestCase, status: CaseReviewStatus) {
+  const updateCaseStatus = useCallback(async (item: TestCase, status: CaseReviewStatus) => {
     if (!selectedRecord) return;
 
     const statusKey = getCaseIdentity(item);
@@ -406,9 +406,9 @@ export default function HistoryPage() {
     } finally {
       setUpdatingStatusKey("");
     }
-  }
+  }, [selectedRecord]);
 
-  async function updateCaseContent(item: TestCase, patch: EditableCasePatch) {
+  const updateCaseContent = useCallback(async (item: TestCase, patch: EditableCasePatch) => {
     if (!selectedRecord) return;
 
     const caseKey = getCaseIdentity(item);
@@ -421,7 +421,7 @@ export default function HistoryPage() {
     } finally {
       setUpdatingCaseKey("");
     }
-  }
+  }, [selectedRecord]);
 
   async function toggleRecordPinned(record: CaseRunHistoryRecord) {
     setUpdatingPinnedId(record.id);
@@ -480,25 +480,32 @@ export default function HistoryPage() {
   }
 
   function selectRecord(id: string) {
-    setActiveId(id);
-    setActiveModule("全部");
-    setActiveReviewStatus("全部");
+    if (activeId === id) return;
+    startTransition(() => {
+      setActiveId(id);
+      setActiveModule("全部");
+      setActiveReviewStatus("全部");
+    });
   }
 
   function selectModule(moduleName: string) {
-    setActiveReviewStatus("全部");
-    setActiveModule(moduleName);
+    startTransition(() => {
+      setActiveReviewStatus("全部");
+      setActiveModule(moduleName);
+    });
     window.setTimeout(() => {
       const groupName = getModuleGroupName(moduleName);
       const firstGroupModule = groupName ? moduleGroupMap.get(groupName)?.[0] : "";
       const targetModuleName = firstGroupModule || moduleName;
       const targetElement = moduleName === "全部" ? document.getElementById("history-case-list") : document.getElementById(getModuleSectionId(targetModuleName));
-      targetElement?.scrollIntoView({ behavior: "smooth", block: "start" });
+      targetElement?.scrollIntoView({ behavior: "auto", block: "start" });
     }, 80);
   }
 
   function selectReviewStatus(status: CaseReviewStatus | "全部") {
-    setActiveReviewStatus(status);
+    startTransition(() => {
+      setActiveReviewStatus(status);
+    });
   }
 
   function focusCoverageModule(moduleName: string) {
@@ -573,7 +580,7 @@ export default function HistoryPage() {
         </div>
       </section>
 
-      <section className={clsx("mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-5 py-6 transition-[grid-template-columns] sm:px-8", workspaceGridClass)}>
+      <section className={clsx("mx-auto grid max-w-[1600px] grid-cols-1 gap-5 px-5 py-6 sm:px-8", workspaceGridClass)}>
         <aside className="min-w-0">
           {leftRailCollapsed ? (
             <div className="sticky top-5 rounded-lg border border-slate-200 bg-white p-2 shadow-sm">
@@ -1256,7 +1263,7 @@ export default function HistoryPage() {
   );
 }
 
-function HistoryCaseCard({
+const HistoryCaseCard = memo(function HistoryCaseCard({
   item,
   saving,
   updating,
@@ -1326,7 +1333,7 @@ function HistoryCaseCard({
 
   return (
     <>
-      <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm">
+      <article className="rounded-lg border border-slate-200 bg-white p-5 shadow-sm [contain-intrinsic-size:360px] [content-visibility:auto]">
         <div className="grid gap-4 sm:grid-cols-[minmax(0,1fr)_auto] sm:items-start">
           <div className="min-w-0">
             <div className="flex flex-wrap items-center gap-2">
@@ -1575,4 +1582,4 @@ function HistoryCaseCard({
       ) : null}
     </>
   );
-}
+});

@@ -1,6 +1,6 @@
 import { existsSync, mkdirSync } from "node:fs";
+import { createRequire } from "node:module";
 import path from "node:path";
-import { DatabaseSync } from "node:sqlite";
 
 import type {
   AgentAnalysisResponse,
@@ -14,6 +14,23 @@ import type {
 } from "@/types/test-case";
 import type { Provider } from "@/lib/model-config";
 import type { CaseReviewStatus } from "@/lib/case-review";
+
+type SqliteStatement = {
+  all: (...values: unknown[]) => unknown[];
+  get: (...values: unknown[]) => unknown;
+  run: (...values: unknown[]) => { changes?: number };
+};
+
+type SqliteDatabase = {
+  exec: (sql: string) => void;
+  prepare: (sql: string) => SqliteStatement;
+};
+
+const nodeRequire = createRequire(import.meta.url);
+const sqliteModuleName = "node" + ":sqlite";
+const { DatabaseSync } = Reflect.apply(nodeRequire, null, [sqliteModuleName]) as {
+  DatabaseSync: new (filename: string) => SqliteDatabase;
+};
 
 type StoredRunHistoryBase = {
   id: string;
@@ -75,7 +92,7 @@ type RunHistoryRow = {
   result_json: string;
 };
 
-let database: DatabaseSync | null = null;
+let database: SqliteDatabase | null = null;
 
 function getDatabase() {
   if (database) return database;
@@ -116,7 +133,7 @@ function getDatabase() {
   return database;
 }
 
-function migrateRunHistoryTable(db: DatabaseSync) {
+function migrateRunHistoryTable(db: SqliteDatabase) {
   const columns = new Set((db.prepare("PRAGMA table_info(run_history)").all() as Array<{ name: string }>).map((item) => item.name));
   const additions: Array<[string, string]> = [
     ["agent", "ALTER TABLE run_history ADD COLUMN agent TEXT NOT NULL DEFAULT 'case-generator'"],
