@@ -1355,7 +1355,7 @@ export default function Home() {
   const elapsedMs = runStartedAt ? (runCompletedAt || now || runStartedAt) - runStartedAt : 0;
   const idleContentMs = lastContentAt ? now - lastContentAt : elapsedMs;
   const idleEventMs = lastEventAt ? now - lastEventAt : elapsedMs;
-  const workspaceGridClass = leftRailCollapsed ? "lg:grid-cols-[72px_minmax(0,1fr)]" : "lg:grid-cols-[280px_minmax(0,1fr)]";
+  const workspaceGridClass = leftRailCollapsed ? "grid-cols-[72px_minmax(0,1fr)]" : "grid-cols-[220px_minmax(0,1fr)] xl:grid-cols-[280px_minmax(0,1fr)]";
   const currentAgentHistory = useMemo(() => runHistory.filter((record) => record.agent === activeAgent), [activeAgent, runHistory]);
 
   const moduleCounts = useMemo(() => {
@@ -1945,34 +1945,34 @@ export default function Home() {
 
       <div className="flex h-full min-h-0 w-full flex-col">
       <section className="shrink-0 border-b border-slate-200/80 bg-white/90 shadow-[0_1px_0_rgba(15,23,42,0.04)] backdrop-blur">
-        <div className="flex h-[72px] flex-col gap-3 px-4 py-3 sm:px-5 lg:flex-row lg:items-center lg:justify-between">
-          <div className="flex items-center gap-3">
-            <div className="grid size-10 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
+        <div className="flex h-[72px] items-center justify-between gap-3 px-4 py-3 sm:px-5">
+          <div className="flex min-w-0 items-center gap-3">
+            <div className="grid size-10 shrink-0 place-items-center rounded-lg bg-slate-950 text-white shadow-sm ring-1 ring-slate-900/10">
               <Bot className="size-5" />
             </div>
-            <div>
-              <h1 className="text-xl font-semibold">TestMind</h1>
-              <p className="text-sm text-slate-500">AI 测试智能体工作台</p>
+            <div className="min-w-0">
+              <h1 className="truncate text-xl font-semibold">TestMind</h1>
+              <p className="truncate text-sm text-slate-500">AI 测试智能体工作台</p>
             </div>
           </div>
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex shrink-0 items-center gap-2">
             {isLoading || isAgentRunning ? (
               <button
-                className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
+                className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-teal-200 bg-teal-50 px-3 text-sm font-semibold text-teal-800 transition hover:bg-teal-100"
                 type="button"
                 onClick={() => setProgressOpen(true)}
               >
                 <Loader2 className="size-4 animate-spin" />
-                已运行 {formatDuration(elapsedMs)}
+                <span className="hidden sm:inline">已运行 {formatDuration(elapsedMs)}</span>
               </button>
             ) : null}
             <Link
-              className="inline-flex h-10 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
+              className="inline-flex h-10 shrink-0 items-center justify-center gap-2 rounded-lg border border-slate-200 bg-white px-3 text-sm font-medium text-slate-700 shadow-sm transition hover:bg-slate-50"
               href="/settings"
               title="配置供应商、密钥和模型"
             >
               <Settings className="size-4" />
-              设置
+              <span className="hidden sm:inline">设置</span>
             </Link>
             <ThemeToggle value={themeMode} onChange={(value) => writeStoredValue(storageKeys.theme, value)} />
           </div>
@@ -2010,7 +2010,7 @@ export default function Home() {
         onChange={(event) => addAgentFiles(event.target.files, "reference")}
       />
 
-      <section className={clsx("grid min-h-0 flex-1 grid-cols-1 transition-[grid-template-columns]", workspaceGridClass)}>
+      <section className={clsx("grid min-h-0 flex-1 transition-[grid-template-columns]", workspaceGridClass)}>
         <aside className="min-w-0 border-r border-slate-200 bg-white">
           <AgentRail
             collapsed={leftRailCollapsed}
