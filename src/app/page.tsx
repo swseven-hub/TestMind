@@ -295,12 +295,14 @@ function agentInputKind(agent: TestAgentType) {
 }
 
 const runHistoryStatusLabels = {
+  running: "运行中",
   success: "成功",
   failed: "失败",
   cancelled: "已停止",
 };
 
 const runHistoryStatusStyles = {
+  running: "bg-sky-50 text-sky-700 ring-sky-200",
   success: "bg-emerald-50 text-emerald-700 ring-emerald-200",
   failed: "bg-rose-50 text-rose-700 ring-rose-200",
   cancelled: "bg-amber-50 text-amber-700 ring-amber-200",

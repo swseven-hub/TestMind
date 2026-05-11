@@ -14,7 +14,7 @@ export type ThinkingMode = "fast" | "quality";
 
 export type ReasoningEffort = "low" | "medium" | "high" | "xhigh";
 
-export type RunStatus = "success" | "failed" | "cancelled";
+export type RunStatus = "running" | "success" | "failed" | "cancelled";
 
 export type TestAgentType = "requirement-review" | "case-generator" | "release-risk" | "change-impact" | "debug-assistant";
 

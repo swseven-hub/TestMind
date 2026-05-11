@@ -30,6 +30,7 @@ import type {
   ReasoningEffort,
   RequirementUncertainty,
   RiskLevel,
+  RunStatus,
   TestCase,
   TestCategory,
   TestDataRequirement,
@@ -2190,6 +2191,7 @@ export async function POST(request: Request) {
   let currentStage = "初始化";
   let lastProgressEvent: StreamEvent | undefined;
   let resultSource: "ai" | "fallback" = "ai";
+  let checkpointRecordId: string | undefined;
   const moduleStats: GenerationModuleStats[] = [];
   const moduleCaseMap = new Map<string, TestCase[]>();
   const qualityReports: GenerationQualityReport[] = [];
@@ -2204,7 +2206,7 @@ export async function POST(request: Request) {
           send(controller, encoder, event);
         };
 
-        const buildResultWithStats = (status: "success" | "failed" | "cancelled", result: GenerateResponse) => {
+        const buildResultWithStats = (status: RunStatus, result: GenerateResponse) => {
           const generationCompletedAt = Date.now();
           const completedIso = new Date(generationCompletedAt).toISOString();
           const moduleNames = new Set(
@@ -2224,7 +2226,14 @@ export async function POST(request: Request) {
             warnings:
               status === "success"
                 ? result.warnings
-                : [...result.warnings, status === "cancelled" ? "本次运行已由用户停止。" : "本次运行失败，已保存可排查的运行日志。"],
+                : [
+                    ...result.warnings,
+                    status === "running"
+                      ? "本次运行正在进行，已保存阶段性结果。"
+                      : status === "cancelled"
+                        ? "本次运行已由用户停止。"
+                        : "本次运行失败，已保存可排查的运行日志。",
+                  ],
             stats: {
               startedAt: generationStartedIso,
               completedAt: completedIso,
@@ -2250,19 +2259,41 @@ export async function POST(request: Request) {
           } satisfies GenerateResponse;
         };
 
-        const buildPartialResult = (status: "failed" | "cancelled", errorMessage: string) => {
+        const buildPartialResult = (status: Exclude<RunStatus, "success">, message: string) => {
           const partialCases = dedupeAndRenumber([...moduleCaseMap.values()].flat());
           return buildResultWithStats(status, {
             source: resultSource,
             fileName,
             summary:
-              status === "cancelled"
-                ? `本次生成已停止，停止前已解析 ${partialCases.length} 条测试用例。`
-                : `本次生成失败，失败前已解析 ${partialCases.length} 条测试用例。`,
+              status === "running"
+                ? `本次生成正在进行，已保存 ${partialCases.length} 条阶段性测试用例。`
+                : status === "cancelled"
+                  ? `本次生成已停止，停止前已解析 ${partialCases.length} 条测试用例。`
+                  : `本次生成失败，失败前已解析 ${partialCases.length} 条测试用例。`,
             cases: partialCases,
-            warnings: [...warnings, errorMessage],
+            warnings: [...warnings, message],
             ...(coverageBlueprint ? { coverageBlueprint } : {}),
           });
+        };
+
+        const saveCheckpoint = (detail: string) => {
+          if (mode === "strategy") return;
+          const checkpointResult = buildPartialResult("running", detail);
+          const savedRecord = saveRunHistoryRecord({
+            id: checkpointRecordId,
+            status: "running",
+            createdAt: generationStartedIso,
+            completedAt: checkpointResult.stats?.completedAt,
+            provider,
+            model,
+            ...(provider === "aliyun" ? { thinkingMode } : {}),
+            failedStage: currentStage,
+            errorMessage: "运行中检查点",
+            errorDetail: detail,
+            lastEvent: lastProgressEvent,
+            result: checkpointResult,
+          });
+          checkpointRecordId = savedRecord.id;
         };
 
         try {
@@ -2365,6 +2396,7 @@ export async function POST(request: Request) {
             const modules = coverageBlueprint.modules;
 
             if (!modules.length) throw new Error("模型未能识别出可测试功能模块。");
+            saveCheckpoint(`覆盖蓝图已保存：识别 ${modules.length} 个模块，计划约 ${coverageBlueprint.plannedCaseCount} 条。`);
 
             if (mode === "strategy") {
               result = {
@@ -2401,6 +2433,7 @@ export async function POST(request: Request) {
               totalUsage = addUsage(totalUsage, batch.usage);
               moduleCaseMap.set(moduleName, moduleCases);
               if (batch.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 输出达到 token 上限，已尽力解析。`);
+              saveCheckpoint(`${moduleName} 初始生成完成，已保存 ${moduleCases.length} 条阶段性用例。`);
 
               const coverageGaps = getCoverageGaps(moduleCases, getCaseTargets(currentModule));
               if (coverageGaps.totalGap > 0) {
@@ -2426,6 +2459,7 @@ export async function POST(request: Request) {
                 moduleDurationMs += repair.durationMs;
                 totalUsage = addUsage(totalUsage, repair.usage);
                 if (repair.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 覆盖补充达到 token 上限，已尽力解析。`);
+                saveCheckpoint(`${moduleName} 覆盖缺口补充完成，已保存 ${moduleCases.length} 条阶段性用例。`);
               }
 
               try {
@@ -2450,9 +2484,11 @@ export async function POST(request: Request) {
                 totalUsage = addUsage(totalUsage, qualityReview.usage);
                 qualityReports.push(qualityReview.qualityReport);
                 if (qualityReview.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 质量审查达到 token 上限，已尽力解析。`);
+                saveCheckpoint(`${moduleName} 质量审查完成，已保存 ${moduleCases.length} 条阶段性用例。`);
               } catch (qualityError) {
                 if (isCancelledError(qualityError)) throw qualityError;
                 warnings.push(`${formatModuleName(currentModule)} 质量审查未完成：${getErrorMessage(qualityError)}`);
+                saveCheckpoint(`${moduleName} 质量审查未完成，已保存审查前 ${moduleCases.length} 条阶段性用例。`);
               }
 
               moduleStats.push({
@@ -2506,6 +2542,7 @@ export async function POST(request: Request) {
           if (mode !== "strategy") {
             try {
               const savedRecord = saveRunHistoryRecord({
+                id: checkpointRecordId,
                 status: "success",
                 createdAt: generationStartedIso,
                 completedAt: result.stats?.completedAt,
@@ -2551,6 +2588,7 @@ export async function POST(request: Request) {
 
           try {
             const savedRecord = saveRunHistoryRecord({
+              id: checkpointRecordId,
               status: cancelled ? "cancelled" : "failed",
               createdAt: generationStartedIso,
               completedAt: partialResult.stats?.completedAt,
