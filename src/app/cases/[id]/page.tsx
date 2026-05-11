@@ -10,21 +10,25 @@ import {
   ChevronLeft,
   ChevronRight,
   Clock3,
+  Database,
   Download,
+  FileQuestion,
   FileText,
   History,
   ListChecks,
   Loader2,
   Search,
+  ServerCog,
   Shield,
   Zap,
 } from "lucide-react";
 import clsx from "clsx";
 import { demoGenerateResponse } from "@/lib/demo-test-cases";
 import { downloadExcel } from "@/lib/download-excel";
+import { generationProfileConfigs, normalizeGenerationProfile } from "@/lib/generation-profile";
 import { formatDuration, formatTokens, isCaseRunHistoryRecord, useRunHistory, type CaseRunHistoryRecord } from "@/lib/run-history";
 import { getTemplateCaseFields } from "@/lib/testcase-template";
-import type { GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
+import type { CoverageBlueprint, GenerateResponse, TestCase, TestCategory } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
 const currentCaseReportStorageKey = "testmind.currentCaseReport.v1";
@@ -81,6 +85,11 @@ function getCaseSearchText(item: TestCase) {
     ...(item.rulesCovered ?? []),
     ...(item.riskTags ?? []),
     ...(item.designTechniques ?? []),
+    ...(item.testDataRefs ?? []),
+    ...(item.environmentRefs ?? []),
+    ...(item.assumptions ?? []),
+    ...(item.uncertaintyRefs ?? []),
+    item.requiresConfirmation ? "需确认 基于假设" : "",
     item.preconditions,
     item.expectedResult,
     template.caseType,
@@ -107,6 +116,10 @@ function groupCases(cases: TestCase[]) {
 
 function uniqueValues(values: Array<string | undefined>) {
   return [...new Set(values.map((item) => item?.trim()).filter((item): item is string => Boolean(item)))];
+}
+
+function joinListValue(values: string[] | undefined) {
+  return (values ?? []).join("、");
 }
 
 function buildTraceabilityRows(cases: TestCase[]) {
@@ -200,6 +213,153 @@ function TraceabilityMatrixPanel({ cases }: { cases: TestCase[] }) {
         </table>
       </div>
       {rows.length > 30 ? <p className="mt-3 text-xs text-slate-400">仅展示前 30 条链路，可通过搜索和模块筛选收敛范围。</p> : null}
+    </section>
+  );
+}
+
+function QualityScorePanel({ result }: { result: GenerateResponse }) {
+  const report = result.qualityReport;
+  if (!report) return null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-3 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <CheckCircle2 className="size-4" />
+            质量评分
+          </div>
+          <h2 className="mt-1 text-lg font-semibold tracking-normal">{report.score} 分</h2>
+          <p className="mt-1 text-sm leading-6 text-slate-500">{report.summary}</p>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">修订 {report.revisedCaseCount} 条</span>
+          <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">问题 {report.findingCount} 个</span>
+          {report.semanticDuplicateCount !== undefined ? (
+            <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">语义合并 {report.semanticDuplicateCount} 条</span>
+          ) : null}
+          {report.uncertaintyCount !== undefined ? (
+            <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 ring-1 ring-amber-200">不确定项 {report.uncertaintyCount} 个</span>
+          ) : null}
+        </div>
+      </div>
+      {report.metrics?.length ? (
+        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          {report.metrics.map((metric) => (
+            <div key={metric.id} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <p className="text-xs font-medium text-slate-500">{metric.label}</p>
+                <p className="text-sm font-semibold text-slate-900">{metric.score}</p>
+              </div>
+              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                <div className="h-full rounded-full bg-teal-600" style={{ width: `${metric.score}%` }} />
+              </div>
+              <p className="mt-2 text-xs leading-5 text-slate-500">{metric.detail}</p>
+            </div>
+          ))}
+        </div>
+      ) : null}
+    </section>
+  );
+}
+
+function BlueprintDependencyPanel({ blueprint }: { blueprint?: CoverageBlueprint }) {
+  if (!blueprint) return null;
+
+  const modulesWithData = blueprint.modules.filter((module) => module.testData?.length || module.environment?.length || module.uncertainties?.length);
+  const uncertaintyCount = (blueprint.uncertainties?.length ?? 0) + blueprint.modules.reduce((sum, module) => sum + (module.uncertainties?.length ?? 0), 0);
+  if (!modulesWithData.length && !uncertaintyCount) return null;
+
+  return (
+    <section className="rounded-lg border border-slate-200 bg-white p-4 shadow-sm">
+      <div className="flex flex-col gap-2 lg:flex-row lg:items-start lg:justify-between">
+        <div>
+          <div className="flex items-center gap-2 text-sm font-medium text-teal-700">
+            <Database className="size-4" />
+            测试数据与环境
+          </div>
+          <h2 className="mt-1 text-lg font-semibold tracking-normal">模块级依赖清单</h2>
+        </div>
+        <div className="flex flex-wrap gap-2 text-xs">
+          {blueprint.generationProfile ? (
+            <span className="rounded-full bg-slate-950 px-2.5 py-1 font-medium text-white">{generationProfileConfigs[normalizeGenerationProfile(blueprint.generationProfile)].label}模式</span>
+          ) : null}
+          <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">{modulesWithData.length} 个模块</span>
+          <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 ring-1 ring-amber-200">{uncertaintyCount} 个不确定项</span>
+        </div>
+      </div>
+
+      {blueprint.uncertainties?.length ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="flex items-center gap-2 text-xs font-medium text-amber-700">
+            <FileQuestion className="size-3.5" />
+            全局待确认
+          </p>
+          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+            {blueprint.uncertainties.map((uncertainty) => (
+              <p key={uncertainty.id} className="rounded-lg bg-white p-3 text-xs leading-5 text-amber-800 ring-1 ring-amber-100">
+                <span className="font-medium">{uncertainty.id}｜{uncertainty.title}</span>：{uncertainty.question || uncertainty.detail}
+              </p>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      <div className="mt-4 grid gap-3">
+        {modulesWithData.slice(0, 12).map((module) => (
+          <div key={`${module.parent ?? ""}-${module.name}`} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+            <h3 className="font-semibold text-slate-800">{module.parent && !module.name.includes(module.parent) ? `${module.parent} / ${module.name}` : module.name}</h3>
+            <div className="mt-3 grid gap-3 xl:grid-cols-3">
+              {module.testData?.length ? (
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                    <Database className="size-3.5" />
+                    测试数据
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {module.testData.map((data) => (
+                      <p key={data.id} className="text-xs leading-5 text-slate-600">
+                        <span className="font-medium text-slate-800">{data.id}｜{data.name}</span>：{[data.scope, joinListValue(data.values), data.setup, data.cleanup].filter(Boolean).join("；")}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {module.environment?.length ? (
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                    <ServerCog className="size-3.5" />
+                    环境依赖
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {module.environment.map((environment) => (
+                      <p key={environment.id} className="text-xs leading-5 text-slate-600">
+                        <span className="font-medium text-slate-800">{environment.id}｜{environment.name}</span>：{[environment.type, environment.description, joinListValue(environment.dependencies), environment.setup].filter(Boolean).join("；")}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+              {module.uncertainties?.length ? (
+                <div>
+                  <p className="flex items-center gap-2 text-xs font-medium text-amber-700">
+                    <FileQuestion className="size-3.5" />
+                    不确定项
+                  </p>
+                  <div className="mt-2 space-y-2">
+                    {module.uncertainties.map((uncertainty) => (
+                      <p key={uncertainty.id} className="text-xs leading-5 text-amber-800">
+                        <span className="font-medium">{uncertainty.id}｜{uncertainty.title}</span>：{uncertainty.question || uncertainty.detail}
+                      </p>
+                    ))}
+                  </div>
+                </div>
+              ) : null}
+            </div>
+          </div>
+        ))}
+      </div>
+      {modulesWithData.length > 12 ? <p className="mt-3 text-xs text-slate-400">仅展示前 12 个模块的依赖清单，可按模块筛选查看用例引用。</p> : null}
     </section>
   );
 }
@@ -330,6 +490,22 @@ function CaseDetailCard({ item }: { item: TestCase }) {
               ))}
             </div>
           ) : null}
+          {item.testDataRefs?.length || item.environmentRefs?.length || item.assumptions?.length || item.requiresConfirmation ? (
+            <div className="mt-3 flex flex-wrap gap-2 text-xs">
+              {(item.testDataRefs ?? []).map((ref) => (
+                <span key={`data-${ref}`} className="rounded-full bg-emerald-50 px-2 py-0.5 font-medium text-emerald-700 ring-1 ring-emerald-200">数据 {ref}</span>
+              ))}
+              {(item.environmentRefs ?? []).map((ref) => (
+                <span key={`env-${ref}`} className="rounded-full bg-sky-50 px-2 py-0.5 font-medium text-sky-700 ring-1 ring-sky-200">环境 {ref}</span>
+              ))}
+              {item.requiresConfirmation ? (
+                <span className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200">需确认</span>
+              ) : null}
+              {(item.uncertaintyRefs ?? []).map((ref) => (
+                <span key={`unc-${ref}`} className="rounded-full bg-amber-50 px-2 py-0.5 font-medium text-amber-700 ring-1 ring-amber-200">{ref}</span>
+              ))}
+            </div>
+          ) : null}
         </div>
       </div>
 
@@ -371,6 +547,16 @@ function CaseDetailCard({ item }: { item: TestCase }) {
         <div className="mt-4 rounded-lg bg-slate-50 p-3">
           <p className="text-xs font-medium uppercase text-slate-400">备注</p>
           <p className="mt-2 whitespace-pre-wrap text-sm leading-6 text-slate-700">{template.remarks}</p>
+        </div>
+      ) : null}
+      {item.assumptions?.length ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <p className="text-xs font-medium uppercase text-amber-700">生成假设</p>
+          <ul className="mt-2 space-y-1 text-sm leading-6 text-amber-800">
+            {item.assumptions.map((assumption, index) => (
+              <li key={`${item.id}-assumption-${index}`}>{assumption}</li>
+            ))}
+          </ul>
         </div>
       ) : null}
       {item.qualityFindings?.length ? (
@@ -655,6 +841,10 @@ export default function CaseDetailPage() {
                   </span>
                 </div>
               </div>
+
+              <QualityScorePanel result={result} />
+
+              <BlueprintDependencyPanel blueprint={result.coverageBlueprint} />
 
               <TraceabilityMatrixPanel cases={result.cases} />
 

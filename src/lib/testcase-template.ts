@@ -79,6 +79,11 @@ export function buildTemplateRemarks(item: TestCase) {
     item.statesCovered?.length ? `覆盖状态：${item.statesCovered.join("、")}` : "",
     item.rulesCovered?.length ? `覆盖规则：${item.rulesCovered.join("、")}` : "",
     item.riskTags?.length ? `风险标签：${item.riskTags.join("、")}` : "",
+    item.testDataRefs?.length ? `测试数据：${item.testDataRefs.join("、")}` : "",
+    item.environmentRefs?.length ? `环境依赖：${item.environmentRefs.join("、")}` : "",
+    item.assumptions?.length ? `生成假设：${item.assumptions.join("、")}` : "",
+    item.uncertaintyRefs?.length ? `不确定项：${item.uncertaintyRefs.join("、")}` : "",
+    item.requiresConfirmation ? "需确认：是" : "",
   ].filter(Boolean);
 
   return parts.join("\n");

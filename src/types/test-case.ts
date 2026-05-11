@@ -20,6 +20,8 @@ export type TestAgentType = "requirement-review" | "case-generator" | "release-r
 
 export type TestAgentAnalysisType = Exclude<TestAgentType, "case-generator">;
 
+export type TestGenerationProfile = "smoke" | "standard" | "high-coverage" | "regression" | "api-first" | "permission-first" | "release-risk";
+
 export type TestDesignTechnique =
   | "等价类"
   | "边界值"
@@ -44,12 +46,22 @@ export type QualityFinding = {
   suggestion: string;
 };
 
+export type GenerationEvaluationMetric = {
+  id: string;
+  label: string;
+  score: number;
+  detail: string;
+};
+
 export type GenerationQualityReport = {
   score: number;
   summary: string;
   revisedCaseCount: number;
   findingCount: number;
   findings: QualityFinding[];
+  metrics?: GenerationEvaluationMetric[];
+  semanticDuplicateCount?: number;
+  uncertaintyCount?: number;
 };
 
 export type GenerationUsage = {
@@ -85,6 +97,36 @@ export type GenerationStats = {
 
 export type CategoryTargetMap = Partial<Record<TestCategory, number>>;
 
+export type TestDataRequirement = {
+  id: string;
+  name: string;
+  scope: string;
+  values: string[];
+  setup: string;
+  cleanup: string;
+  owner?: string;
+};
+
+export type TestEnvironmentRequirement = {
+  id: string;
+  name: string;
+  type: "账号" | "角色" | "配置" | "状态" | "依赖服务" | "第三方" | "数据" | "其他";
+  description: string;
+  dependencies: string[];
+  setup: string;
+  cleanup: string;
+};
+
+export type RequirementUncertainty = {
+  id: string;
+  type: "无法确定的规则" | "需要产品确认的问题" | "基于假设生成";
+  title: string;
+  detail: string;
+  impact: string;
+  question?: string;
+  relatedRequirementId?: string;
+};
+
 export type CoverageTestPoint = {
   id: string;
   name: string;
@@ -114,6 +156,9 @@ export type CoverageModule = {
   isCore: boolean;
   testPoints: CoverageTestPoint[];
   riskPoints: string[];
+  testData?: TestDataRequirement[];
+  environment?: TestEnvironmentRequirement[];
+  uncertainties?: RequirementUncertainty[];
   designTechniques?: TestDesignTechnique[];
   categoryTargets: CategoryTargetMap;
   skippedCategories: string[];
@@ -123,10 +168,12 @@ export type CoverageModule = {
 };
 
 export type CoverageBlueprint = {
+  generationProfile?: TestGenerationProfile;
   documentComplexity: Complexity;
   coverageRationale: string;
   modules: CoverageModule[];
   plannedCaseCount: number;
+  uncertainties?: RequirementUncertainty[];
 };
 
 export type TestCase = {
@@ -153,6 +200,11 @@ export type TestCase = {
   rulesCovered?: string[];
   riskTags?: string[];
   designTechniques?: TestDesignTechnique[];
+  testDataRefs?: string[];
+  environmentRefs?: string[];
+  assumptions?: string[];
+  uncertaintyRefs?: string[];
+  requiresConfirmation?: boolean;
   preconditions: string;
   steps: string[];
   expectedResults?: string[];

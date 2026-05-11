@@ -9,7 +9,9 @@ import {
   Brain,
   CheckCircle2,
   Clock3,
+  Database,
   Download,
+  FileQuestion,
   FileText,
   GitPullRequest,
   History,
@@ -24,7 +26,9 @@ import {
   PanelLeftOpen,
   PlayCircle,
   Plus,
+  ServerCog,
   Settings,
+  SlidersHorizontal,
   Sparkles,
   Square,
   Sun,
@@ -38,6 +42,7 @@ import {
 import clsx from "clsx";
 import { demoGenerateResponse, demoPrdHighlights } from "@/lib/demo-test-cases";
 import { downloadExcel } from "@/lib/download-excel";
+import { generationProfileConfigs, generationProfiles, normalizeGenerationProfile } from "@/lib/generation-profile";
 import {
   normalizeProvider,
   normalizeThinkingMode,
@@ -68,17 +73,22 @@ import type {
   CoverageBlueprint,
   CoverageModule,
   GenerateResponse,
+  RequirementUncertainty,
   RiskLevel,
   TestAgentAnalysisType,
   TestAgentType,
   TestCategory,
+  TestDataRequirement,
   TestDesignTechnique,
+  TestEnvironmentRequirement,
 } from "@/types/test-case";
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
 const designTechniqueOptions: TestDesignTechnique[] = ["等价类", "边界值", "判定表", "状态迁移", "流程分支", "权限矩阵", "组合覆盖", "接口契约", "幂等", "并发", "回滚"];
 const complexityOptions: Complexity[] = ["minimal", "simple", "medium", "complex", "large"];
 const riskOptions: RiskLevel[] = ["low", "medium", "high", "critical"];
+const environmentTypeOptions: TestEnvironmentRequirement["type"][] = ["账号", "角色", "配置", "状态", "依赖服务", "第三方", "数据", "其他"];
+const uncertaintyTypeOptions: RequirementUncertainty["type"][] = ["无法确定的规则", "需要产品确认的问题", "基于假设生成"];
 const analysisFileAccept = ".pdf,.txt,.log,.md,.json,.jsonl,.csv,.tsv,.yaml,.yml,.xml,.har,.diff,.patch,.sql,.proto,.ts,.tsx,.js,.jsx,.java,.kt,.py,.go,.swift,.c,.cpp,.h";
 
 const categoryStyles: Record<TestCategory, string> = {
@@ -106,6 +116,7 @@ const riskLabels: Record<RiskLevel, string> = {
 
 const storageKeys = {
   activeAgent: "testmind.agent.active.v1",
+  generationProfile: "testmind.caseGenerator.profile.v1",
   provider: "testmind.provider",
   theme: "testmind.theme.v1",
   leftRailCollapsed: "testmind.ui.leftRailCollapsed.v1",
@@ -269,6 +280,10 @@ function useStoredProvider() {
 
 function useStoredAgent() {
   return normalizeTestAgent(useStoredValue(storageKeys.activeAgent, "case-generator"));
+}
+
+function useStoredGenerationProfile() {
+  return normalizeGenerationProfile(useStoredValue(storageKeys.generationProfile, "standard"));
 }
 
 function isAnalysisAgent(agent: TestAgentType): agent is TestAgentAnalysisType {
@@ -734,6 +749,51 @@ function sumCoverageTargets(targets: Partial<Record<TestCategory, number>> | und
   return categories.reduce((sum, category) => sum + clampStrategyCount(targets?.[category] ?? 0), 0);
 }
 
+function splitListValue(value: string) {
+  return value
+    .split(/[、,，\n]/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function joinListValue(values: string[] | undefined) {
+  return (values ?? []).join("、");
+}
+
+function buildNewTestData(index: number): TestDataRequirement {
+  return {
+    id: `TD-NEW-${String(index + 1).padStart(2, "0")}`,
+    name: "新测试数据",
+    scope: "适用模块",
+    values: [],
+    setup: "预置测试数据",
+    cleanup: "清理测试数据",
+  };
+}
+
+function buildNewEnvironment(index: number): TestEnvironmentRequirement {
+  return {
+    id: `ENV-NEW-${String(index + 1).padStart(2, "0")}`,
+    name: "新环境依赖",
+    type: "其他",
+    description: "待补充依赖说明",
+    dependencies: [],
+    setup: "确认依赖可用",
+    cleanup: "恢复环境配置",
+  };
+}
+
+function buildNewUncertainty(index: number): RequirementUncertainty {
+  return {
+    id: `UNC-NEW-${String(index + 1).padStart(2, "0")}`,
+    type: "需要产品确认的问题",
+    title: "待确认规则",
+    detail: "PRD 暂未说明该规则。",
+    impact: "影响测试用例预期和边界覆盖。",
+    question: "请确认该规则的准确口径。",
+  };
+}
+
 function normalizeStrategyModule(module: CoverageModule): CoverageModule {
   const targetCaseCount = Math.max(1, sumCoverageTargets(module.categoryTargets) || module.targetCaseCount || module.testPoints.reduce((sum, point) => sum + (point.expectedCaseCount || sumCoverageTargets(point.coverage)), 0));
   return {
@@ -741,6 +801,9 @@ function normalizeStrategyModule(module: CoverageModule): CoverageModule {
     targetCaseCount,
     categoryTargets: Object.fromEntries(categories.map((category) => [category, clampStrategyCount(module.categoryTargets?.[category] ?? 0)])) as Record<TestCategory, number>,
     designTechniques: module.designTechniques ?? [],
+    testData: module.testData ?? [],
+    environment: module.environment ?? [],
+    uncertainties: module.uncertainties ?? [],
     testPoints: module.testPoints.map((point) => ({
       ...point,
       expectedCaseCount: Math.max(1, point.expectedCaseCount || sumCoverageTargets(point.coverage)),
@@ -754,6 +817,8 @@ function recalculateStrategy(blueprint: CoverageBlueprint): CoverageBlueprint {
   const modules = blueprint.modules.map(normalizeStrategyModule);
   return {
     ...blueprint,
+    generationProfile: normalizeGenerationProfile(blueprint.generationProfile),
+    uncertainties: blueprint.uncertainties ?? [],
     modules,
     plannedCaseCount: modules.reduce((sum, module) => sum + module.targetCaseCount, 0),
   };
@@ -794,6 +859,9 @@ function buildNewModule(index: number): CoverageModule {
     isCore: false,
     testPoints: [buildNewTestPoint(0)],
     riskPoints: [],
+    testData: [],
+    environment: [],
+    uncertainties: [],
     designTechniques: ["等价类"],
     categoryTargets: { 功能: 1 },
     skippedCategories: [],
@@ -837,6 +905,31 @@ function StrategyEditorPanel({
       return { ...module, testPoints, categoryTargets, targetCaseCount: sumCoverageTargets(categoryTargets) };
     });
   };
+  const updateStrategyUncertainty = (uncertaintyIndex: number, updater: (uncertainty: RequirementUncertainty) => RequirementUncertainty) => {
+    updateStrategy((current) => ({
+      ...current,
+      uncertainties: (current.uncertainties ?? []).map((uncertainty, index) => (index === uncertaintyIndex ? updater(uncertainty) : uncertainty)),
+    }));
+  };
+  const updateModuleTestData = (moduleIndex: number, dataIndex: number, updater: (data: TestDataRequirement) => TestDataRequirement) => {
+    updateModule(moduleIndex, (module) => ({
+      ...module,
+      testData: (module.testData ?? []).map((data, index) => (index === dataIndex ? updater(data) : data)),
+    }));
+  };
+  const updateModuleEnvironment = (moduleIndex: number, environmentIndex: number, updater: (environment: TestEnvironmentRequirement) => TestEnvironmentRequirement) => {
+    updateModule(moduleIndex, (module) => ({
+      ...module,
+      environment: (module.environment ?? []).map((environment, index) => (index === environmentIndex ? updater(environment) : environment)),
+    }));
+  };
+  const updateModuleUncertainty = (moduleIndex: number, uncertaintyIndex: number, updater: (uncertainty: RequirementUncertainty) => RequirementUncertainty) => {
+    updateModule(moduleIndex, (module) => ({
+      ...module,
+      uncertainties: (module.uncertainties ?? []).map((uncertainty, index) => (index === uncertaintyIndex ? updater(uncertainty) : uncertainty)),
+    }));
+  };
+  const profileConfig = generationProfileConfigs[normalizeGenerationProfile(strategy.generationProfile)];
 
   return (
     <section className="rounded-lg border border-teal-200 bg-white p-5 shadow-sm">
@@ -884,9 +977,77 @@ function StrategyEditorPanel({
       </div>
 
       <div className="mt-4 flex flex-wrap gap-2 text-xs">
+        <span className="rounded-full bg-slate-950 px-2.5 py-1 font-medium text-white">{profileConfig.label}模式</span>
         <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">{strategy.modules.length} 个模块</span>
+        <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 ring-1 ring-amber-200">
+          {(strategy.uncertainties?.length ?? 0) + strategy.modules.reduce((sum, module) => sum + (module.uncertainties?.length ?? 0), 0)} 个不确定项
+        </span>
         <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">确认后生成用例</span>
       </div>
+
+      {(strategy.uncertainties?.length ?? 0) ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
+            <FileQuestion className="size-4" />
+            全局不确定项
+          </div>
+          <div className="mt-3 grid gap-2">
+            {(strategy.uncertainties ?? []).map((uncertainty, uncertaintyIndex) => (
+              <div key={`${uncertainty.id}-${uncertaintyIndex}`} className="rounded-lg bg-white p-3 ring-1 ring-amber-100">
+                <div className="grid gap-2 lg:grid-cols-[150px_1fr_auto]">
+                  <select
+                    className="h-9 rounded-md border border-amber-200 bg-white px-2 text-sm outline-none focus:border-amber-500"
+                    value={uncertainty.type}
+                    onChange={(event) => updateStrategyUncertainty(uncertaintyIndex, (item) => ({ ...item, type: event.target.value as RequirementUncertainty["type"] }))}
+                  >
+                    {uncertaintyTypeOptions.map((type) => (
+                      <option key={type} value={type}>{type}</option>
+                    ))}
+                  </select>
+                  <input
+                    className="h-9 rounded-md border border-amber-200 bg-white px-2 text-sm outline-none focus:border-amber-500"
+                    value={uncertainty.title}
+                    onChange={(event) => updateStrategyUncertainty(uncertaintyIndex, (item) => ({ ...item, title: event.target.value }))}
+                  />
+                  <button
+                    aria-label={`删除 ${uncertainty.title}`}
+                    className="grid size-9 place-items-center rounded-lg bg-white text-rose-500 ring-1 ring-rose-100 transition hover:bg-rose-50"
+                    type="button"
+                    onClick={() => updateStrategy((current) => ({ ...current, uncertainties: (current.uncertainties ?? []).filter((_, index) => index !== uncertaintyIndex) }))}
+                  >
+                    <Trash2 className="size-4" />
+                  </button>
+                </div>
+                <div className="mt-2 grid gap-2 lg:grid-cols-3">
+                  <textarea
+                    className="min-h-16 rounded-md border border-amber-200 bg-white px-2 py-2 text-sm leading-6 outline-none focus:border-amber-500"
+                    value={uncertainty.detail}
+                    onChange={(event) => updateStrategyUncertainty(uncertaintyIndex, (item) => ({ ...item, detail: event.target.value }))}
+                  />
+                  <textarea
+                    className="min-h-16 rounded-md border border-amber-200 bg-white px-2 py-2 text-sm leading-6 outline-none focus:border-amber-500"
+                    value={uncertainty.impact}
+                    onChange={(event) => updateStrategyUncertainty(uncertaintyIndex, (item) => ({ ...item, impact: event.target.value }))}
+                  />
+                  <textarea
+                    className="min-h-16 rounded-md border border-amber-200 bg-white px-2 py-2 text-sm leading-6 outline-none focus:border-amber-500"
+                    value={uncertainty.question ?? ""}
+                    onChange={(event) => updateStrategyUncertainty(uncertaintyIndex, (item) => ({ ...item, question: event.target.value }))}
+                  />
+                </div>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+      <button
+        className="mt-3 inline-flex h-9 items-center justify-center gap-2 rounded-lg bg-white px-3 text-sm font-medium text-slate-700 ring-1 ring-slate-200 transition hover:bg-amber-50 hover:text-amber-800"
+        type="button"
+        onClick={() => updateStrategy((current) => ({ ...current, uncertainties: [...(current.uncertainties ?? []), buildNewUncertainty(current.uncertainties?.length ?? 0)] }))}
+      >
+        <Plus className="size-4" />
+        添加全局不确定项
+      </button>
 
       <div className="mt-5 space-y-4">
         {strategy.modules.map((module, moduleIndex) => {
@@ -1026,6 +1187,220 @@ function StrategyEditorPanel({
                     />
                   </label>
                 ))}
+              </div>
+
+              <div className="mt-4 grid gap-3 xl:grid-cols-3">
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <Database className="size-3.5" />
+                      测试数据
+                    </p>
+                    <button
+                      aria-label="添加测试数据"
+                      className="grid size-7 place-items-center rounded-md text-teal-700 transition hover:bg-teal-50"
+                      type="button"
+                      onClick={() => updateModule(moduleIndex, (item) => ({ ...item, testData: [...(item.testData ?? []), buildNewTestData(item.testData?.length ?? 0)] }))}
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {(module.testData ?? []).map((data, dataIndex) => (
+                      <div key={`${data.id}-${dataIndex}`} className="rounded-lg bg-slate-50 p-2 ring-1 ring-slate-100">
+                        <div className="grid gap-2 sm:grid-cols-[92px_1fr_auto]">
+                          <input
+                            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                            value={data.id}
+                            onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, id: event.target.value }))}
+                          />
+                          <input
+                            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                            value={data.name}
+                            onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, name: event.target.value }))}
+                          />
+                          <button
+                            aria-label={`删除 ${data.name}`}
+                            className="grid size-8 place-items-center rounded-md text-rose-500 transition hover:bg-rose-50"
+                            type="button"
+                            onClick={() => updateModule(moduleIndex, (item) => ({ ...item, testData: (item.testData ?? []).filter((_, index) => index !== dataIndex) }))}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                        <input
+                          className="mt-2 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                          placeholder="适用范围"
+                          value={data.scope}
+                          onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, scope: event.target.value }))}
+                        />
+                        <input
+                          className="mt-2 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                          placeholder="取值，用顿号分隔"
+                          value={joinListValue(data.values)}
+                          onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, values: splitListValue(event.target.value) }))}
+                        />
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <textarea
+                            className="min-h-14 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-teal-500"
+                            placeholder="准备动作"
+                            value={data.setup}
+                            onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, setup: event.target.value }))}
+                          />
+                          <textarea
+                            className="min-h-14 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-teal-500"
+                            placeholder="清理动作"
+                            value={data.cleanup}
+                            onChange={(event) => updateModuleTestData(moduleIndex, dataIndex, (item) => ({ ...item, cleanup: event.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                    {!(module.testData?.length) ? <p className="text-xs leading-5 text-slate-400">未配置特殊测试数据。</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <ServerCog className="size-3.5" />
+                      环境依赖
+                    </p>
+                    <button
+                      aria-label="添加环境依赖"
+                      className="grid size-7 place-items-center rounded-md text-teal-700 transition hover:bg-teal-50"
+                      type="button"
+                      onClick={() => updateModule(moduleIndex, (item) => ({ ...item, environment: [...(item.environment ?? []), buildNewEnvironment(item.environment?.length ?? 0)] }))}
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {(module.environment ?? []).map((environment, environmentIndex) => (
+                      <div key={`${environment.id}-${environmentIndex}`} className="rounded-lg bg-slate-50 p-2 ring-1 ring-slate-100">
+                        <div className="grid gap-2 sm:grid-cols-[92px_1fr_auto]">
+                          <input
+                            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                            value={environment.id}
+                            onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, id: event.target.value }))}
+                          />
+                          <input
+                            className="h-8 rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                            value={environment.name}
+                            onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, name: event.target.value }))}
+                          />
+                          <button
+                            aria-label={`删除 ${environment.name}`}
+                            className="grid size-8 place-items-center rounded-md text-rose-500 transition hover:bg-rose-50"
+                            type="button"
+                            onClick={() => updateModule(moduleIndex, (item) => ({ ...item, environment: (item.environment ?? []).filter((_, index) => index !== environmentIndex) }))}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                        <select
+                          className="mt-2 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                          value={environment.type}
+                          onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, type: event.target.value as TestEnvironmentRequirement["type"] }))}
+                        >
+                          {environmentTypeOptions.map((type) => (
+                            <option key={type} value={type}>{type}</option>
+                          ))}
+                        </select>
+                        <textarea
+                          className="mt-2 min-h-14 w-full rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-teal-500"
+                          placeholder="依赖说明"
+                          value={environment.description}
+                          onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, description: event.target.value }))}
+                        />
+                        <input
+                          className="mt-2 h-8 w-full rounded-md border border-slate-200 bg-white px-2 text-xs outline-none focus:border-teal-500"
+                          placeholder="依赖项，用顿号分隔"
+                          value={joinListValue(environment.dependencies)}
+                          onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, dependencies: splitListValue(event.target.value) }))}
+                        />
+                        <div className="mt-2 grid gap-2 sm:grid-cols-2">
+                          <textarea
+                            className="min-h-14 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-teal-500"
+                            placeholder="准备动作"
+                            value={environment.setup}
+                            onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, setup: event.target.value }))}
+                          />
+                          <textarea
+                            className="min-h-14 rounded-md border border-slate-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-teal-500"
+                            placeholder="清理动作"
+                            value={environment.cleanup}
+                            onChange={(event) => updateModuleEnvironment(moduleIndex, environmentIndex, (item) => ({ ...item, cleanup: event.target.value }))}
+                          />
+                        </div>
+                      </div>
+                    ))}
+                    {!(module.environment?.length) ? <p className="text-xs leading-5 text-slate-400">未配置特殊环境依赖。</p> : null}
+                  </div>
+                </div>
+
+                <div className="rounded-lg bg-white p-3 ring-1 ring-slate-200">
+                  <div className="flex items-center justify-between gap-2">
+                    <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                      <FileQuestion className="size-3.5" />
+                      不确定项
+                    </p>
+                    <button
+                      aria-label="添加不确定项"
+                      className="grid size-7 place-items-center rounded-md text-teal-700 transition hover:bg-teal-50"
+                      type="button"
+                      onClick={() => updateModule(moduleIndex, (item) => ({ ...item, uncertainties: [...(item.uncertainties ?? []), buildNewUncertainty(item.uncertainties?.length ?? 0)] }))}
+                    >
+                      <Plus className="size-4" />
+                    </button>
+                  </div>
+                  <div className="mt-2 space-y-2">
+                    {(module.uncertainties ?? []).map((uncertainty, uncertaintyIndex) => (
+                      <div key={`${uncertainty.id}-${uncertaintyIndex}`} className="rounded-lg bg-amber-50 p-2 ring-1 ring-amber-100">
+                        <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                          <select
+                            className="h-8 rounded-md border border-amber-200 bg-white px-2 text-xs outline-none focus:border-amber-500"
+                            value={uncertainty.type}
+                            onChange={(event) => updateModuleUncertainty(moduleIndex, uncertaintyIndex, (item) => ({ ...item, type: event.target.value as RequirementUncertainty["type"] }))}
+                          >
+                            {uncertaintyTypeOptions.map((type) => (
+                              <option key={type} value={type}>{type}</option>
+                            ))}
+                          </select>
+                          <button
+                            aria-label={`删除 ${uncertainty.title}`}
+                            className="grid size-8 place-items-center rounded-md text-rose-500 transition hover:bg-rose-50"
+                            type="button"
+                            onClick={() => updateModule(moduleIndex, (item) => ({ ...item, uncertainties: (item.uncertainties ?? []).filter((_, index) => index !== uncertaintyIndex) }))}
+                          >
+                            <Trash2 className="size-3.5" />
+                          </button>
+                        </div>
+                        <input
+                          className="mt-2 h-8 w-full rounded-md border border-amber-200 bg-white px-2 text-xs outline-none focus:border-amber-500"
+                          value={uncertainty.title}
+                          onChange={(event) => updateModuleUncertainty(moduleIndex, uncertaintyIndex, (item) => ({ ...item, title: event.target.value }))}
+                        />
+                        <textarea
+                          className="mt-2 min-h-14 w-full rounded-md border border-amber-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-amber-500"
+                          placeholder="规则缺口或假设"
+                          value={uncertainty.detail}
+                          onChange={(event) => updateModuleUncertainty(moduleIndex, uncertaintyIndex, (item) => ({ ...item, detail: event.target.value }))}
+                        />
+                        <textarea
+                          className="mt-2 min-h-14 w-full rounded-md border border-amber-200 bg-white px-2 py-1.5 text-xs leading-5 outline-none focus:border-amber-500"
+                          placeholder="影响与待确认问题"
+                          value={[uncertainty.impact, uncertainty.question].filter(Boolean).join("\n")}
+                          onChange={(event) => {
+                            const [impact = "", ...questionParts] = event.target.value.split("\n");
+                            updateModuleUncertainty(moduleIndex, uncertaintyIndex, (item) => ({ ...item, impact, question: questionParts.join("\n") }));
+                          }}
+                        />
+                      </div>
+                    ))}
+                    {!(module.uncertainties?.length) ? <p className="text-xs leading-5 text-slate-400">暂无模块级待确认问题。</p> : null}
+                  </div>
+                </div>
               </div>
 
               <div className="mt-4 space-y-3">
@@ -1175,8 +1550,32 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
           </h2>
           <p className="mt-1 text-sm leading-6 text-slate-500">{blueprint.coverageRationale}</p>
         </div>
-        <span className="rounded-full bg-slate-50 px-3 py-1 text-sm text-slate-600 ring-1 ring-slate-200">{blueprint.modules.length} 个模块</span>
+        <div className="flex flex-wrap gap-2">
+          {blueprint.generationProfile ? (
+            <span className="rounded-full bg-slate-950 px-3 py-1 text-sm text-white">{generationProfileConfigs[normalizeGenerationProfile(blueprint.generationProfile)].label}模式</span>
+          ) : null}
+          <span className="rounded-full bg-slate-50 px-3 py-1 text-sm text-slate-600 ring-1 ring-slate-200">{blueprint.modules.length} 个模块</span>
+        </div>
       </div>
+
+      {blueprint.uncertainties?.length ? (
+        <div className="mt-4 rounded-lg border border-amber-200 bg-amber-50 p-3">
+          <div className="flex items-center gap-2 text-sm font-medium text-amber-800">
+            <FileQuestion className="size-4" />
+            全局不确定项
+          </div>
+          <div className="mt-2 grid gap-2 lg:grid-cols-2">
+            {blueprint.uncertainties.map((uncertainty) => (
+              <div key={uncertainty.id} className="rounded-lg bg-white p-3 text-sm ring-1 ring-amber-100">
+                <p className="font-medium text-slate-800">{uncertainty.title}</p>
+                <p className="mt-1 text-xs text-amber-700">{uncertainty.type}</p>
+                <p className="mt-2 leading-6 text-slate-600">{uncertainty.detail}</p>
+                <p className="mt-1 text-xs leading-5 text-slate-500">{uncertainty.question || uncertainty.impact}</p>
+              </div>
+            ))}
+          </div>
+        </div>
+      ) : null}
 
       <div className="mt-5 divide-y divide-slate-200">
         {visibleModules.map((module) => {
@@ -1221,6 +1620,56 @@ function CoverageBlueprintPanel({ activeModule, result }: { activeModule: string
                   {(module.skippedCategories ?? []).map((note) => (
                     <p key={note}>{note}</p>
                   ))}
+                </div>
+              ) : null}
+
+              {module.testData?.length || module.environment?.length || module.uncertainties?.length ? (
+                <div className="mt-3 grid gap-3 lg:grid-cols-3">
+                  {module.testData?.length ? (
+                    <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                      <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                        <Database className="size-3.5" />
+                        测试数据
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {module.testData.map((data) => (
+                          <p key={data.id} className="text-xs leading-5 text-slate-600">
+                            <span className="font-medium text-slate-800">{data.id}｜{data.name}</span>：{[data.scope, joinListValue(data.values), data.setup].filter(Boolean).join("；")}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {module.environment?.length ? (
+                    <div className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                      <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                        <ServerCog className="size-3.5" />
+                        环境依赖
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {module.environment.map((environment) => (
+                          <p key={environment.id} className="text-xs leading-5 text-slate-600">
+                            <span className="font-medium text-slate-800">{environment.id}｜{environment.name}</span>：{[environment.type, environment.description, joinListValue(environment.dependencies)].filter(Boolean).join("；")}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
+                  {module.uncertainties?.length ? (
+                    <div className="rounded-lg bg-amber-50 p-3 ring-1 ring-amber-200">
+                      <p className="flex items-center gap-2 text-xs font-medium text-amber-700">
+                        <FileQuestion className="size-3.5" />
+                        不确定项
+                      </p>
+                      <div className="mt-2 space-y-2">
+                        {module.uncertainties.map((uncertainty) => (
+                          <p key={uncertainty.id} className="text-xs leading-5 text-amber-800">
+                            <span className="font-medium">{uncertainty.id}｜{uncertainty.title}</span>：{uncertainty.question || uncertainty.detail}
+                          </p>
+                        ))}
+                      </div>
+                    </div>
+                  ) : null}
                 </div>
               ) : null}
 
@@ -1788,6 +2237,7 @@ export default function Home() {
   const [agentResult, setAgentResult] = useState<AgentAnalysisResponse | null>(null);
   const isClientReady = useClientReady();
   const activeAgent = useStoredAgent();
+  const generationProfile = useStoredGenerationProfile();
   const provider = useStoredProvider();
   const apiKey = useStoredValue(apiKeyStorageKey(provider), "");
   const model = useStoredValue(modelStorageKey(provider), providerModels[provider]);
@@ -2137,6 +2587,7 @@ export default function Home() {
     formData.append("mode", mode);
     formData.append("provider", provider);
     formData.append("model", model.trim() || providerModels[provider]);
+    formData.append("generationProfile", strategy?.generationProfile ?? generationProfile);
     formData.append("thinkingMode", thinkingMode);
     formData.append("reasoningEffort", reasoningEffort);
     if (provider === "velotric") {
@@ -2147,7 +2598,7 @@ export default function Home() {
       formData.append("apiKey", trimmedApiKey);
     }
     if (strategy) {
-      formData.append("coverageBlueprint", JSON.stringify(recalculateStrategy(strategy)));
+      formData.append("coverageBlueprint", JSON.stringify(recalculateStrategy({ ...strategy, generationProfile: strategy.generationProfile ?? generationProfile })));
     }
     return formData;
   }
@@ -2236,7 +2687,7 @@ export default function Home() {
       id: "start",
       type: "stage",
       message,
-      detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]}${
+      detail: `${providerLabels[provider]} / ${model.trim() || providerModels[provider]} / ${generationProfileConfigs[generationProfile].label}模式${
         provider === "aliyun" ? ` / ${thinkingModeLabels[thinkingMode]}` : provider === "openai" || provider === "velotric" ? ` / 推理${reasoningEffortLabels[reasoningEffort]}` : ""
       }`,
     });
@@ -2391,15 +2842,50 @@ export default function Home() {
             onPick={pickReviewFile}
           />
         ) : !analysisMode ? (
-          <PdfUploadDropzone
-            compact
-            emptyLabel="上传 PRD PDF"
-            file={file}
-            isDragging={isDragging}
-            onClick={() => inputRef.current?.click()}
-            onDragChange={setIsDragging}
-            onPick={pickFile}
-          />
+          <>
+            <PdfUploadDropzone
+              compact
+              emptyLabel="上传 PRD PDF"
+              file={file}
+              isDragging={isDragging}
+              onClick={() => inputRef.current?.click()}
+              onDragChange={setIsDragging}
+              onPick={pickFile}
+            />
+            <div className="mt-3 rounded-lg bg-slate-50 p-2 ring-1 ring-slate-200">
+              <div className="flex items-center justify-between gap-2">
+                <p className="flex items-center gap-2 text-xs font-medium text-slate-500">
+                  <SlidersHorizontal className="size-3.5" />
+                  生成模式
+                </p>
+                <span className="text-xs text-slate-400">目标粒度</span>
+              </div>
+              <div className="mt-2 grid grid-cols-2 gap-1.5 sm:grid-cols-3 xl:grid-cols-2">
+                {generationProfiles.map((profile) => {
+                  const config = generationProfileConfigs[profile];
+                  const selected = generationProfile === profile;
+                  return (
+                    <button
+                      key={profile}
+                      className={clsx(
+                        "min-h-9 rounded-md px-2 py-1.5 text-left text-xs ring-1 transition",
+                        selected ? "bg-slate-950 text-white ring-slate-950" : "bg-white text-slate-600 ring-slate-200 hover:bg-teal-50 hover:text-teal-800",
+                      )}
+                      title={config.description}
+                      type="button"
+                      onClick={() => {
+                        writeStoredValue(storageKeys.generationProfile, profile);
+                        setStrategyDraft((current) => (current ? recalculateStrategy({ ...current, generationProfile: profile }) : current));
+                      }}
+                    >
+                      <span className="block font-semibold">{config.shortLabel}</span>
+                      <span className={clsx("mt-0.5 block leading-4", selected ? "text-slate-300" : "text-slate-400")}>{config.maxPlannedCases} 条内</span>
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          </>
         ) : (
           <div className="mt-3 space-y-2">
             {activeAgent !== "debug-assistant" ? (
@@ -2618,6 +3104,11 @@ export default function Home() {
                           <span className="rounded-full bg-teal-50 px-2.5 py-1 font-medium text-teal-700 ring-1 ring-teal-200">
                             {sourceLabel}
                           </span>
+                          {result.coverageBlueprint?.generationProfile ? (
+                            <span className="rounded-full bg-slate-950 px-2.5 py-1 font-medium text-white">
+                              {generationProfileConfigs[normalizeGenerationProfile(result.coverageBlueprint.generationProfile)].label}模式
+                            </span>
+                          ) : null}
                         </div>
                       </div>
                       <div className="flex flex-wrap items-center gap-2">
@@ -2671,6 +3162,36 @@ export default function Home() {
                           </div>
                         </div>
                       </div>
+                      {result.qualityReport.metrics?.length ? (
+                        <div className="mt-4 grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+                          {result.qualityReport.metrics.map((metric) => (
+                            <div key={metric.id} className="rounded-lg bg-slate-50 p-3 ring-1 ring-slate-200">
+                              <div className="flex items-center justify-between gap-2">
+                                <p className="text-xs font-medium text-slate-500">{metric.label}</p>
+                                <p className="text-sm font-semibold text-slate-900">{metric.score}</p>
+                              </div>
+                              <div className="mt-2 h-1.5 overflow-hidden rounded-full bg-slate-200">
+                                <div className="h-full rounded-full bg-teal-600" style={{ width: `${metric.score}%` }} />
+                              </div>
+                              <p className="mt-2 text-xs leading-5 text-slate-500">{metric.detail}</p>
+                            </div>
+                          ))}
+                        </div>
+                      ) : null}
+                      {result.qualityReport.semanticDuplicateCount !== undefined || result.qualityReport.uncertaintyCount !== undefined ? (
+                        <div className="mt-3 flex flex-wrap gap-2 text-xs">
+                          {result.qualityReport.semanticDuplicateCount !== undefined ? (
+                            <span className="rounded-full bg-slate-50 px-2.5 py-1 font-medium text-slate-600 ring-1 ring-slate-200">
+                              语义合并 {result.qualityReport.semanticDuplicateCount} 条
+                            </span>
+                          ) : null}
+                          {result.qualityReport.uncertaintyCount !== undefined ? (
+                            <span className="rounded-full bg-amber-50 px-2.5 py-1 font-medium text-amber-700 ring-1 ring-amber-200">
+                              不确定项 {result.qualityReport.uncertaintyCount} 个
+                            </span>
+                          ) : null}
+                        </div>
+                      ) : null}
                       {result.qualityReport.findings.length ? (
                         <div className="mt-4 grid gap-2 lg:grid-cols-2">
                           {result.qualityReport.findings.slice(0, 4).map((finding, index) => (
