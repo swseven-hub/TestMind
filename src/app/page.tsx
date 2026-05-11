@@ -1,6 +1,6 @@
 "use client";
 
-import { type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
+import { type MouseEvent, type ReactNode, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import Link from "next/link";
 import {
   AlertCircle,
@@ -59,10 +59,12 @@ import {
   formatRunTime,
   formatTokens,
   isAnalysisRunHistoryRecord,
+  isCaseRunHistoryRecord,
   refreshRunHistory,
   storageChangeEvent,
   subscribeStorage,
   useRunHistory,
+  type CaseRunHistoryRecord,
   type RunHistoryRecord,
 } from "@/lib/run-history";
 import { normalizeTestAgent } from "@/lib/test-agent";
@@ -321,6 +323,27 @@ function getRunHistoryTitle(record: RunHistoryRecord) {
 function getRunHistoryCountLabel(record: RunHistoryRecord) {
   if (isAnalysisRunHistoryRecord(record)) return `${record.caseCount} 项分析`;
   return `${record.caseCount} 条测试点`;
+}
+
+type ResumeCheckpoint = NonNullable<GenerateResponse["checkpoint"]>;
+
+const checkpointStageLabels: Record<ResumeCheckpoint["moduleStage"], string> = {
+  "module-start": "待生成模块",
+  "coverage-repair": "待补覆盖缺口",
+  "quality-review": "待质量检查",
+  finalize: "待合并统计",
+};
+
+function isResumableCaseRecord(record: CaseRunHistoryRecord) {
+  return record.status !== "success" && Boolean(record.result.coverageBlueprint);
+}
+
+function getResumeRecordProgressLabel(record: CaseRunHistoryRecord) {
+  const checkpoint = record.result.checkpoint;
+  const moduleCount = record.result.coverageBlueprint?.modules.length ?? record.moduleCount;
+  const completedCount = checkpoint?.completedModuleNames.length ?? 0;
+  const stageLabel = checkpoint ? checkpointStageLabels[checkpoint.moduleStage] : "待继续";
+  return `${completedCount}/${moduleCount || 0} 模块 · ${record.caseCount} 条 · ${stageLabel}`;
 }
 
 function writeStoredBoolean(key: string, value: boolean) {
@@ -2295,7 +2318,16 @@ export default function Home() {
     () => Object.keys(moduleCounts).sort((a, b) => moduleCounts[b] - moduleCounts[a] || a.localeCompare(b, "zh-CN")),
     [moduleCounts],
   );
+  const selectedFileName = file?.name ?? "";
   const caseDetailHref = result ? getCaseDetailHref(result) : "/cases/current";
+  const resumeCandidates = useMemo(() => {
+    if (activeAgent !== "case-generator" || !selectedFileName) return [];
+    return runHistory
+      .filter(isCaseRunHistoryRecord)
+      .filter((record) => record.fileName === selectedFileName && isResumableCaseRecord(record))
+      .sort((left, right) => new Date(right.completedAt ?? right.createdAt).getTime() - new Date(left.completedAt ?? left.createdAt).getTime())
+      .slice(0, 3);
+  }, [activeAgent, runHistory, selectedFileName]);
 
   function toggleStoredBoolean(key: string, current: boolean) {
     writeStoredBoolean(key, !current);
@@ -2583,7 +2615,7 @@ export default function Home() {
     }
   }
 
-  function buildGenerateFormData(mode: "strategy" | "cases", strategy?: CoverageBlueprint) {
+  function buildGenerateFormData(mode: "strategy" | "cases", strategy?: CoverageBlueprint, resumeHistoryId?: string) {
     const formData = new FormData();
     if (file) formData.append("file", file);
     formData.append("mode", mode);
@@ -2601,6 +2633,9 @@ export default function Home() {
     }
     if (strategy) {
       formData.append("coverageBlueprint", JSON.stringify(recalculateStrategy({ ...strategy, generationProfile: strategy.generationProfile ?? generationProfile })));
+    }
+    if (resumeHistoryId) {
+      formData.append("resumeHistoryId", resumeHistoryId);
     }
     return formData;
   }
@@ -2781,6 +2816,52 @@ export default function Home() {
     }
   }
 
+  async function resumeCaseGeneration(record: CaseRunHistoryRecord) {
+    if (!validateCaseGenerationInput()) return;
+
+    setIsLoading(true);
+    setError("");
+    setResult(record.result);
+    setStrategyDraft(record.result.coverageBlueprint ? recalculateStrategy(record.result.coverageBlueprint) : null);
+    startCaseProgress("AI 续跑过程", "AI 正在续跑", "准备从历史检查点继续生成");
+
+    try {
+      const finalResult = await readGenerateStream(buildGenerateFormData("cases", undefined, record.id), "续跑结束但没有收到测试用例结果。");
+      writeCurrentCaseReport(finalResult);
+      setResult(finalResult);
+      setStrategyDraft(finalResult.coverageBlueprint ? recalculateStrategy(finalResult.coverageBlueprint) : null);
+      await refreshRunHistory();
+      setProgressStatus("success");
+      setRunCompletedAt(getNowMs());
+      setActiveModule("全部");
+      window.setTimeout(() => setProgressOpen(false), 900);
+    } catch (caught) {
+      const isAbort = caught instanceof Error && caught.name === "AbortError";
+      const message = isAbort ? "已停止本次续跑。" : caught instanceof Error ? caught.message : "续跑失败";
+      if (isAbort) {
+        setError("");
+        setProgressStatus("cancelled");
+        setProgressError("已停止本次续跑，运行日志会保存在历史记录中。");
+        refreshRunHistory();
+        window.setTimeout(() => refreshRunHistory(), 1500);
+      } else {
+        setError(message);
+        setProgressStatus("error");
+        setProgressError((current) => current || message);
+      }
+      setRunCompletedAt(getNowMs());
+    } finally {
+      abortControllerRef.current = null;
+      setIsLoading(false);
+    }
+  }
+
+  function handleResumeCaseClick(event: MouseEvent<HTMLButtonElement>) {
+    const recordId = event.currentTarget.dataset.resumeRecordId;
+    const record = resumeCandidates.find((item) => item.id === recordId);
+    if (record) void resumeCaseGeneration(record);
+  }
+
   async function generate() {
     if (strategyDraft) {
       await generateCasesFromStrategy();
@@ -2887,6 +2968,36 @@ export default function Home() {
                 })}
               </div>
             </div>
+            {resumeCandidates.length ? (
+              <div className="mt-3 rounded-lg border border-amber-200 bg-amber-50 p-3">
+                <div className="flex items-center justify-between gap-2">
+                  <p className="flex items-center gap-2 text-xs font-semibold text-amber-800">
+                    <Clock3 className="size-3.5" />
+                    可继续的生成
+                  </p>
+                  <span className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-amber-700 ring-1 ring-amber-200">{resumeCandidates.length} 条</span>
+                </div>
+                <div className="mt-2 space-y-1.5">
+                  {resumeCandidates.map((record) => (
+                    <button
+                      key={record.id}
+                      className="flex w-full min-w-0 items-center justify-between gap-2 rounded-md bg-white px-2.5 py-2 text-left text-xs ring-1 ring-amber-200 transition hover:bg-amber-100 disabled:cursor-not-allowed disabled:opacity-60"
+                      data-resume-record-id={record.id}
+                      disabled={isLoading}
+                      type="button"
+                      onClick={handleResumeCaseClick}
+                    >
+                      <span className="min-w-0">
+                        <span className="block truncate font-semibold text-slate-800">{formatRunTime(record.createdAt)}</span>
+                        <span className="mt-0.5 block truncate text-slate-500">{getResumeRecordProgressLabel(record)}</span>
+                        {record.result.checkpoint?.detail ? <span className="mt-0.5 block truncate text-amber-700">{record.result.checkpoint.detail}</span> : null}
+                      </span>
+                      <PlayCircle className="size-4 shrink-0 text-amber-700" />
+                    </button>
+                  ))}
+                </div>
+              </div>
+            ) : null}
           </>
         ) : (
           <div className="mt-3 space-y-2">

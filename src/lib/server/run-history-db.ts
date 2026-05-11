@@ -258,6 +258,12 @@ export function listRunHistoryRecords() {
   return rows.map(rowToRecord).filter((item): item is StoredRunHistoryRecord => Boolean(item));
 }
 
+export function getRunHistoryRecord(id: string) {
+  const db = getDatabase();
+  const row = db.prepare("SELECT * FROM run_history WHERE id = ?").get(id) as RunHistoryRow | undefined;
+  return row ? rowToRecord(row) : null;
+}
+
 export function saveRunHistoryRecord(input: {
   id?: string;
   agent?: TestAgentType;

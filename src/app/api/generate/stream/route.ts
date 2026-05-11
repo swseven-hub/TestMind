@@ -1,11 +1,12 @@
 import OpenAI from "openai";
+import { createHash } from "node:crypto";
 import { PDFParse } from "pdf-parse";
 import { jsonrepair } from "jsonrepair";
 import { generateFallbackCases } from "@/lib/test-case-generator";
 import { formatGenerationEvaluationBasis } from "@/lib/generation-evaluation";
 import { generationProfileConfigs, normalizeGenerationProfile } from "@/lib/generation-profile";
 import { estimateAliyunCostCny, estimateDeepSeekCostCny, normalizeReasoningEffort, normalizeThinkingMode, providerBaseURLs, providerLabels, providerModels } from "@/lib/model-config";
-import { saveRunHistoryRecord } from "@/lib/server/run-history-db";
+import { getRunHistoryRecord, saveRunHistoryRecord } from "@/lib/server/run-history-db";
 import {
   caseTypeOptions,
   defaultExecutionType,
@@ -23,6 +24,7 @@ import type {
   CoverageTestPoint,
   GenerateResponse,
   GenerationEvaluationMetric,
+  GenerationCheckpointStage,
   GenerationModuleStats,
   GenerationQualityReport,
   GenerationUsage,
@@ -80,6 +82,15 @@ type QualityReviewResponse = {
   findingCount?: number;
   findings?: QualityFinding[];
   cases: TestCase[];
+};
+
+type ResumableGenerateResponse = GenerateResponse & { coverageBlueprint: CoverageBlueprint };
+
+type ResumeState = {
+  historyId: string;
+  result: ResumableGenerateResponse;
+  nextModuleIndex: number;
+  moduleStage: GenerationCheckpointStage;
 };
 
 const categories: TestCategory[] = ["功能", "边界", "异常", "权限", "性能"];
@@ -1397,6 +1408,50 @@ function buildSummary(fileName: string, modules: ModulePlan[], cases: TestCase[]
   return `基于 ${fileName} 按“${getProfileLabel(generationProfile)}”模式先生成测试策略再分模块生成：识别 ${modules.length} 个功能模块（${complexityText}），蓝图计划约 ${plannedTotal} 条，实际合并 ${cases.length} 条可执行测试用例，其中 ${counts}。数量按 PRD 可测试点、风险等级、适用测试类型和生成模式自适应分配；${coreModules.length ? `核心模块包括 ${coreModules.join("、")}。` : "未单独标记核心模块。"}`;
 }
 
+function groupCasesByModule(cases: TestCase[]) {
+  const grouped = new Map<string, TestCase[]>();
+  for (const item of cases) grouped.set(item.module, [...(grouped.get(item.module) ?? []), item]);
+  return grouped;
+}
+
+function hashSourceText(text: string) {
+  return createHash("sha256").update(text).digest("hex");
+}
+
+function buildFallbackResumeState(historyId: string, result: ResumableGenerateResponse): ResumeState {
+  const modules = result.coverageBlueprint?.modules ?? [];
+  const moduleCaseMap = groupCasesByModule(result.cases);
+  const nextModuleIndex = modules.findIndex((module) => !moduleCaseMap.get(formatModuleName(module))?.length);
+  return {
+    historyId,
+    result,
+    nextModuleIndex: nextModuleIndex >= 0 ? nextModuleIndex : modules.length,
+    moduleStage: nextModuleIndex >= 0 ? "module-start" : "finalize",
+  };
+}
+
+function loadResumeState(historyId: string, fileName: string, sourceTextHash: string): ResumeState {
+  const record = getRunHistoryRecord(historyId);
+  if (!record || record.agent !== "case-generator") throw new Error("未找到可继续的用例生成记录。");
+  if (record.status === "success") throw new Error("这条用例生成记录已经完成，不需要继续生成。");
+  if (record.fileName !== fileName) throw new Error("续跑记录与当前上传 PDF 不一致，请重新选择同一份 PRD。");
+  if (!record.result.coverageBlueprint) throw new Error("续跑记录缺少覆盖蓝图，无法继续生成。");
+
+  const result = record.result as ResumableGenerateResponse;
+  const checkpoint = record.result.checkpoint;
+  if (checkpoint?.sourceTextHash && checkpoint.sourceTextHash !== sourceTextHash) {
+    throw new Error("续跑记录与当前 PDF 内容不一致，请上传上次中断时使用的同一份 PRD。");
+  }
+  if (!checkpoint) return buildFallbackResumeState(record.id, result);
+
+  return {
+    historyId: record.id,
+    result,
+    nextModuleIndex: checkpoint.nextModuleIndex,
+    moduleStage: checkpoint.moduleStage,
+  };
+}
+
 async function generateModulePlan({
   apiKey,
   baseURL,
@@ -2185,6 +2240,7 @@ export async function POST(request: Request) {
   let reasoningEffort: ReasoningEffort = "medium";
   let fileName = "未命名 PRD";
   let sourceTextLength: number | undefined;
+  let sourceTextHash: string | undefined;
   let totalUsage: GenerationUsage | undefined;
   let plannedCaseCount: number | undefined;
   let coverageBlueprint: CoverageBlueprint | undefined;
@@ -2192,6 +2248,7 @@ export async function POST(request: Request) {
   let lastProgressEvent: StreamEvent | undefined;
   let resultSource: "ai" | "fallback" = "ai";
   let checkpointRecordId: string | undefined;
+  let latestCheckpoint: GenerateResponse["checkpoint"];
   const moduleStats: GenerationModuleStats[] = [];
   const moduleCaseMap = new Map<string, TestCase[]>();
   const qualityReports: GenerationQualityReport[] = [];
@@ -2259,7 +2316,11 @@ export async function POST(request: Request) {
           } satisfies GenerateResponse;
         };
 
-        const buildPartialResult = (status: Exclude<RunStatus, "success">, message: string) => {
+        const buildPartialResult = (
+          status: Exclude<RunStatus, "success">,
+          message: string,
+          checkpoint?: GenerateResponse["checkpoint"],
+        ) => {
           const partialCases = dedupeAndRenumber([...moduleCaseMap.values()].flat());
           return buildResultWithStats(status, {
             source: resultSource,
@@ -2273,12 +2334,48 @@ export async function POST(request: Request) {
             cases: partialCases,
             warnings: [...warnings, message],
             ...(coverageBlueprint ? { coverageBlueprint } : {}),
+            ...(checkpoint ? { checkpoint } : {}),
           });
         };
 
-        const saveCheckpoint = (detail: string) => {
+        const upsertModuleStat = (stat: GenerationModuleStats) => {
+          const existingIndex = moduleStats.findIndex((item) => item.name === stat.name);
+          if (existingIndex >= 0) moduleStats[existingIndex] = stat;
+          else moduleStats.push(stat);
+        };
+
+        const buildCheckpoint = ({
+          currentModuleName,
+          detail,
+          moduleStage,
+          nextModuleIndex,
+        }: {
+          currentModuleName?: string;
+          detail: string;
+          moduleStage: GenerationCheckpointStage;
+          nextModuleIndex: number;
+        }): GenerateResponse["checkpoint"] => ({
+          updatedAt: new Date().toISOString(),
+          detail,
+          nextModuleIndex,
+          moduleStage,
+          ...(currentModuleName ? { currentModuleName } : {}),
+          ...(sourceTextHash ? { sourceTextHash } : {}),
+          completedModuleNames: (coverageBlueprint?.modules ?? []).slice(0, nextModuleIndex).map(formatModuleName),
+        });
+
+        const saveCheckpoint = (
+          detail: string,
+          checkpointOptions: {
+            currentModuleName?: string;
+            moduleStage: GenerationCheckpointStage;
+            nextModuleIndex: number;
+          },
+        ) => {
           if (mode === "strategy") return;
-          const checkpointResult = buildPartialResult("running", detail);
+          const checkpoint = buildCheckpoint({ ...checkpointOptions, detail });
+          latestCheckpoint = checkpoint;
+          const checkpointResult = buildPartialResult("running", detail, checkpoint);
           const savedRecord = saveRunHistoryRecord({
             id: checkpointRecordId,
             status: "running",
@@ -2308,6 +2405,7 @@ export async function POST(request: Request) {
           const thinkingModeValue = formData.get("thinkingMode");
           const reasoningEffortValue = formData.get("reasoningEffort");
           const strategyValue = formData.get("coverageBlueprint");
+          const resumeHistoryValue = formData.get("resumeHistoryId");
           generationProfile = normalizeGenerationProfile(formData.get("generationProfile"));
           mode = getGenerationMode(formData.get("mode"));
           provider = getProvider(formData.get("provider"));
@@ -2350,6 +2448,7 @@ export async function POST(request: Request) {
           const text = await extractPdfText(file);
           assertNotAborted(request.signal);
           sourceTextLength = text.length;
+          sourceTextHash = hashSourceText(text);
           if (!text || text.length < 30) {
             throw new Error("未能从 PDF 中提取到足够文本，请确认文档可复制或包含文本层。");
           }
@@ -2360,9 +2459,34 @@ export async function POST(request: Request) {
             detail: `提取 ${text.length.toLocaleString("zh-CN")} 个字符`,
           });
 
+          const resumeHistoryId = typeof resumeHistoryValue === "string" ? resumeHistoryValue.trim() : "";
+          let resumeState: ResumeState | undefined;
           let result: GenerateResponse;
+          if (!apiKey && resumeHistoryId) {
+            throw new Error("续跑需要可用的模型 API Key；当前未检测到 Key，无法调用模型继续生成。");
+          }
+
           if (apiKey) {
-            if (mode === "cases") {
+            if (mode === "cases" && resumeHistoryId) {
+              resumeState = loadResumeState(resumeHistoryId, file.name, sourceTextHash);
+              checkpointRecordId = resumeState.historyId;
+              coverageBlueprint = resumeState.result.coverageBlueprint;
+              generationProfile = coverageBlueprint.generationProfile ?? generationProfile;
+              resultSource = resumeState.result.source === "fallback" ? "fallback" : "ai";
+              latestCheckpoint = resumeState.result.checkpoint;
+              for (const [moduleName, cases] of groupCasesByModule(resumeState.result.cases)) moduleCaseMap.set(moduleName, cases);
+              moduleStats.splice(0, moduleStats.length, ...(resumeState.result.stats?.modules ?? []));
+              totalUsage = addUsage(totalUsage, resumeState.result.stats?.usage);
+              warnings.push(`已从历史记录 ${resumeState.historyId} 继续生成，保留 ${resumeState.result.cases.length} 条阶段性用例。`);
+              onEvent({
+                type: "stage",
+                message: "从历史检查点继续生成",
+                detail:
+                  resumeState.moduleStage === "finalize"
+                    ? `已恢复 ${resumeState.result.cases.length} 条阶段性用例，将进入最终合并统计。`
+                    : `已恢复 ${resumeState.result.cases.length} 条阶段性用例，从第 ${resumeState.nextModuleIndex + 1} 个模块继续。`,
+              });
+            } else if (mode === "cases") {
               coverageBlueprint = parseCoverageBlueprintInput(strategyValue, generationProfile);
               if (coverageBlueprint) {
                 generationProfile = coverageBlueprint.generationProfile ?? generationProfile;
@@ -2396,7 +2520,12 @@ export async function POST(request: Request) {
             const modules = coverageBlueprint.modules;
 
             if (!modules.length) throw new Error("模型未能识别出可测试功能模块。");
-            saveCheckpoint(`覆盖蓝图已保存：识别 ${modules.length} 个模块，计划约 ${coverageBlueprint.plannedCaseCount} 条。`);
+            if (!resumeState) {
+              saveCheckpoint(`覆盖蓝图已保存：识别 ${modules.length} 个模块，计划约 ${coverageBlueprint.plannedCaseCount} 条。`, {
+                moduleStage: "module-start",
+                nextModuleIndex: 0,
+              });
+            }
 
             if (mode === "strategy") {
               result = {
@@ -2408,124 +2537,145 @@ export async function POST(request: Request) {
                 coverageBlueprint,
               };
             } else {
-              for (let index = 0; index < modules.length; index += 1) {
-              assertNotAborted(request.signal);
-              const currentModule = modules[index];
-              const moduleName = formatModuleName(currentModule);
-              const batch = await generateCasesForModule({
-                apiKey,
-                baseURL,
-                generationProfile,
-                index,
-                model,
-                module: currentModule,
-                moduleCount: modules.length,
-                onEvent,
-                provider,
-                reasoningEffort,
-                signal: request.signal,
-                text,
-                thinkingMode,
-              });
-              let moduleCases = batch.cases;
-              let moduleUsage = batch.usage;
-              let moduleDurationMs = batch.durationMs;
-              totalUsage = addUsage(totalUsage, batch.usage);
-              moduleCaseMap.set(moduleName, moduleCases);
-              if (batch.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 输出达到 token 上限，已尽力解析。`);
-              saveCheckpoint(`${moduleName} 初始生成完成，已保存 ${moduleCases.length} 条阶段性用例。`);
-
-              const coverageGaps = getCoverageGaps(moduleCases, getCaseTargets(currentModule));
-              if (coverageGaps.totalGap > 0) {
+              const resumeStage = resumeState?.moduleStage ?? "module-start";
+              const resumeStartIndex = resumeState ? clamp(resumeStage === "finalize" ? modules.length : resumeState.nextModuleIndex, 0, modules.length) : 0;
+              for (let index = resumeStartIndex; index < modules.length; index += 1) {
                 assertNotAborted(request.signal);
-                const repair = await generateCoverageRepairCasesForModule({
-                  apiKey,
-                  baseURL,
-                  coverageGaps,
-                  existingCases: moduleCases,
-                  generationProfile,
-                  model,
-                  module: currentModule,
-                  onEvent,
-                  provider,
-                  reasoningEffort,
-                  signal: request.signal,
-                  text,
-                  thinkingMode,
+                const currentModule = modules[index];
+                const moduleName = formatModuleName(currentModule);
+                const stageForModule = index === resumeStartIndex ? resumeStage : "module-start";
+                let moduleCases = moduleCaseMap.get(moduleName) ?? [];
+                let moduleUsage: GenerationUsage | undefined;
+                let moduleDurationMs = 0;
+
+                if (stageForModule === "module-start" || !moduleCases.length) {
+                  const batch = await generateCasesForModule({
+                    apiKey,
+                    baseURL,
+                    generationProfile,
+                    index,
+                    model,
+                    module: currentModule,
+                    moduleCount: modules.length,
+                    onEvent,
+                    provider,
+                    reasoningEffort,
+                    signal: request.signal,
+                    text,
+                    thinkingMode,
+                  });
+                  moduleCases = batch.cases;
+                  moduleUsage = batch.usage;
+                  moduleDurationMs = batch.durationMs;
+                  totalUsage = addUsage(totalUsage, batch.usage);
+                  moduleCaseMap.set(moduleName, moduleCases);
+                  if (batch.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 输出达到 token 上限，已尽力解析。`);
+                  saveCheckpoint(`${moduleName} 初始生成完成，已保存 ${moduleCases.length} 条阶段性用例。`, {
+                    currentModuleName: moduleName,
+                    moduleStage: "coverage-repair",
+                    nextModuleIndex: index,
+                  });
+                }
+
+                if (stageForModule !== "quality-review") {
+                  const coverageGaps = getCoverageGaps(moduleCases, getCaseTargets(currentModule));
+                  if (coverageGaps.totalGap > 0) {
+                    assertNotAborted(request.signal);
+                    const repair = await generateCoverageRepairCasesForModule({
+                      apiKey,
+                      baseURL,
+                      coverageGaps,
+                      existingCases: moduleCases,
+                      generationProfile,
+                      model,
+                      module: currentModule,
+                      onEvent,
+                      provider,
+                      reasoningEffort,
+                      signal: request.signal,
+                      text,
+                      thinkingMode,
+                    });
+                    moduleCases = [...moduleCases, ...repair.cases];
+                    moduleCaseMap.set(moduleName, moduleCases);
+                    moduleUsage = addUsage(moduleUsage, repair.usage);
+                    moduleDurationMs += repair.durationMs;
+                    totalUsage = addUsage(totalUsage, repair.usage);
+                    if (repair.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 覆盖补充达到 token 上限，已尽力解析。`);
+                  }
+                  saveCheckpoint(`${moduleName} 覆盖缺口补充完成，已保存 ${moduleCases.length} 条阶段性用例。`, {
+                    currentModuleName: moduleName,
+                    moduleStage: "quality-review",
+                    nextModuleIndex: index,
+                  });
+                }
+
+                try {
+                  assertNotAborted(request.signal);
+                  const qualityReview = await reviewAndReviseCasesForModule({
+                    apiKey,
+                    baseURL,
+                    existingCases: moduleCases,
+                    model,
+                    module: currentModule,
+                    onEvent,
+                    provider,
+                    reasoningEffort,
+                    signal: request.signal,
+                    text,
+                    thinkingMode,
+                  });
+                  moduleCases = qualityReview.cases;
+                  moduleCaseMap.set(moduleName, moduleCases);
+                  moduleUsage = addUsage(moduleUsage, qualityReview.usage);
+                  moduleDurationMs += qualityReview.durationMs;
+                  totalUsage = addUsage(totalUsage, qualityReview.usage);
+                  qualityReports.push(qualityReview.qualityReport);
+                  if (qualityReview.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 质量审查达到 token 上限，已尽力解析。`);
+                } catch (qualityError) {
+                  if (isCancelledError(qualityError)) throw qualityError;
+                  warnings.push(`${formatModuleName(currentModule)} 质量审查未完成：${getErrorMessage(qualityError)}`);
+                }
+
+                upsertModuleStat({
+                  name: moduleName,
+                  caseCount: moduleCases.length,
+                  durationMs: moduleDurationMs,
+                  ...(moduleUsage ? { usage: moduleUsage } : {}),
                 });
-                moduleCases = [...moduleCases, ...repair.cases];
-                moduleCaseMap.set(moduleName, moduleCases);
-                moduleUsage = addUsage(moduleUsage, repair.usage);
-                moduleDurationMs += repair.durationMs;
-                totalUsage = addUsage(totalUsage, repair.usage);
-                if (repair.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 覆盖补充达到 token 上限，已尽力解析。`);
-                saveCheckpoint(`${moduleName} 覆盖缺口补充完成，已保存 ${moduleCases.length} 条阶段性用例。`);
+                saveCheckpoint(`${moduleName} 已完成，已保存 ${moduleCases.length} 条阶段性用例。`, {
+                  moduleStage: index + 1 >= modules.length ? "finalize" : "module-start",
+                  nextModuleIndex: index + 1,
+                });
               }
 
-              try {
-                assertNotAborted(request.signal);
-                const qualityReview = await reviewAndReviseCasesForModule({
-                  apiKey,
-                  baseURL,
-                  existingCases: moduleCases,
-                  model,
-                  module: currentModule,
-                  onEvent,
-                  provider,
-                  reasoningEffort,
-                  signal: request.signal,
-                  text,
-                  thinkingMode,
-                });
-                moduleCases = qualityReview.cases;
-                moduleCaseMap.set(moduleName, moduleCases);
-                moduleUsage = addUsage(moduleUsage, qualityReview.usage);
-                moduleDurationMs += qualityReview.durationMs;
-                totalUsage = addUsage(totalUsage, qualityReview.usage);
-                qualityReports.push(qualityReview.qualityReport);
-                if (qualityReview.hitTokenLimit) warnings.push(`${formatModuleName(currentModule)} 质量审查达到 token 上限，已尽力解析。`);
-                saveCheckpoint(`${moduleName} 质量审查完成，已保存 ${moduleCases.length} 条阶段性用例。`);
-              } catch (qualityError) {
-                if (isCancelledError(qualityError)) throw qualityError;
-                warnings.push(`${formatModuleName(currentModule)} 质量审查未完成：${getErrorMessage(qualityError)}`);
-                saveCheckpoint(`${moduleName} 质量审查未完成，已保存审查前 ${moduleCases.length} 条阶段性用例。`);
-              }
-
-              moduleStats.push({
-                name: moduleName,
-                caseCount: moduleCases.length,
-                durationMs: moduleDurationMs,
-                ...(moduleUsage ? { usage: moduleUsage } : {}),
+              const dedupeResult = semanticDedupeAndRenumber([...moduleCaseMap.values()].flat());
+              const cases = dedupeResult.cases;
+              const reviewReport = summarizeQualityReports(qualityReports);
+              const evaluation = buildGenerationEvaluation({
+                blueprint: coverageBlueprint,
+                cases,
+                semanticDuplicateCount: dedupeResult.semanticDuplicateCount,
               });
-            }
-
-            const dedupeResult = semanticDedupeAndRenumber([...moduleCaseMap.values()].flat());
-            const cases = dedupeResult.cases;
-            const reviewReport = summarizeQualityReports(qualityReports);
-            const evaluation = buildGenerationEvaluation({
-              blueprint: coverageBlueprint,
-              cases,
-              semanticDuplicateCount: dedupeResult.semanticDuplicateCount,
-            });
-            const uncertaintyCount =
-              (coverageBlueprint.uncertainties?.length ?? 0) +
-              coverageBlueprint.modules.reduce((sum, module) => sum + (module.uncertainties?.length ?? 0), 0);
-            const qualityReport = mergeQualityReport({
-              evaluation,
-              reviewReport,
-              semanticDuplicateCount: dedupeResult.semanticDuplicateCount,
-              semanticFindings: dedupeResult.findings,
-              uncertaintyCount,
-            });
-            result = {
-              source: "ai",
-              fileName: file.name,
-              summary: buildSummary(file.name, modules, cases, generationProfile),
-              cases,
-              warnings,
-              coverageBlueprint,
-              ...(qualityReport ? { qualityReport } : {}),
-            };
+              const uncertaintyCount =
+                (coverageBlueprint.uncertainties?.length ?? 0) +
+                coverageBlueprint.modules.reduce((sum, module) => sum + (module.uncertainties?.length ?? 0), 0);
+              const qualityReport = mergeQualityReport({
+                evaluation,
+                reviewReport,
+                semanticDuplicateCount: dedupeResult.semanticDuplicateCount,
+                semanticFindings: dedupeResult.findings,
+                uncertaintyCount,
+              });
+              result = {
+                source: "ai",
+                fileName: file.name,
+                summary: buildSummary(file.name, modules, cases, generationProfile),
+                cases,
+                warnings,
+                coverageBlueprint,
+                ...(qualityReport ? { qualityReport } : {}),
+              };
             }
           } else {
             resultSource = "fallback";
@@ -2584,7 +2734,7 @@ export async function POST(request: Request) {
           const cancelled = isCancelledError(error) || request.signal.aborted;
           const errorMessage = cancelled ? "已停止本次生成。" : "生成失败，请检查 API Key、额度、模型名称、模型权限或网络连接。";
           const errorDetail = cancelled ? "用户主动停止运行，已保存停止前的运行日志。" : getErrorMessage(error);
-          const partialResult = buildPartialResult(cancelled ? "cancelled" : "failed", errorDetail);
+          const partialResult = buildPartialResult(cancelled ? "cancelled" : "failed", errorDetail, latestCheckpoint);
 
           try {
             const savedRecord = saveRunHistoryRecord({

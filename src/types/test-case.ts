@@ -95,6 +95,18 @@ export type GenerationStats = {
   modules: GenerationModuleStats[];
 };
 
+export type GenerationCheckpointStage = "module-start" | "coverage-repair" | "quality-review" | "finalize";
+
+export type GenerationCheckpoint = {
+  updatedAt: string;
+  detail: string;
+  nextModuleIndex: number;
+  moduleStage: GenerationCheckpointStage;
+  currentModuleName?: string;
+  sourceTextHash?: string;
+  completedModuleNames: string[];
+};
+
 export type CategoryTargetMap = Partial<Record<TestCategory, number>>;
 
 export type TestDataRequirement = {
@@ -222,6 +234,7 @@ export type GenerateResponse = {
   cases: TestCase[];
   warnings: string[];
   coverageBlueprint?: CoverageBlueprint;
+  checkpoint?: GenerationCheckpoint;
   qualityReport?: GenerationQualityReport;
   stats?: GenerationStats;
 };
